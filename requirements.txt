@@ -1,0 +1,13 @@
+pandas
+pandas-datareader
+seaborn
+numpy
+yfinance
+matplotlib
+PyWavelets
+statsmodels
+scikit-learn
+torch
+joblib
+fastparquet
+pyarrow

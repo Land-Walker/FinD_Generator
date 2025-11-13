@@ -1,5 +1,5 @@
-import data_collector
-import data_loader 
+from src.data_collector import DataCollector
+from src.data_loader import TimeGradDataModule
 
 # 1. Collect or load data
 collector = DataCollector()

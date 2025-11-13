@@ -1,20 +1,16 @@
 import pandas as pd
 import pandas_datareader.data as web
-import seaborn as sns
-import numpy as np
 import yfinance as yf
-import matplotlib.pyplot as plt
 
-from typing import Dict, List, Optional, Tuple
-import joblib
+from typing import Dict
 import os
 import warnings
 warnings.filterwarnings('ignore')
 
-import config
+from . import config
 
 class DataCollector:
-    def __init__(self, data_dir: str = RAW_DATA_DIR):
+    def __init__(self, data_dir: str = config.RAW_DATA_DIR):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
 
@@ -93,20 +89,20 @@ class DataCollector:
     def collect_all_data(self, flattening: bool=True, save: bool=True):
         """Fetch and preprocess all market, target, and macro data."""
         # Market and target
-        market_df = self.fetch_yf_data(MARKET_TICKER, START_DATE, END_DATE)
-        target_df = self.fetch_yf_data(TARGET_TICKER, START_DATE, END_DATE)
+        market_df = self.fetch_yf_data(config.MARKET_TICKER, config.START_DATE, config.END_DATE)
+        target_df = self.fetch_yf_data(config.TARGET_TICKER, config.START_DATE, config.END_DATE)
         market_df.name = "market"
         target_df.name = "target"
         self.rename_price_to_dfname(market_df)
         self.rename_price_to_dfname(target_df)
 
         # Macro
-        daily_macro_df = self.fetch_macro_data(FRED_DAILY_IDS, START_DATE, END_DATE)
-        monthly_macro_df = self.fetch_macro_data(FRED_MONTHLY_IDS, START_DATE, END_DATE)
-        quarterly_macro_df = self.fetch_macro_data(FRED_QUARTERLY_IDS, START_DATE, END_DATE)
+        daily_macro_df = self.fetch_macro_data(config.FRED_DAILY_IDS, config.START_DATE, config.END_DATE)
+        monthly_macro_df = self.fetch_macro_data(config.FRED_MONTHLY_IDS, config.START_DATE, config.END_DATE)
+        quarterly_macro_df = self.fetch_macro_data(config.FRED_QUARTERLY_IDS, config.START_DATE, config.END_DATE)
 
         # Add VIX to daily macro
-        vix_df = self.fetch_vix(START_DATE, END_DATE)
+        vix_df = self.fetch_vix(config.START_DATE, config.END_DATE)
         # Merge VIX data into daily_macro_df
         daily_macro_df = pd.merge(daily_macro_df, vix_df, on='Date', how='left')
 

@@ -26,12 +26,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from typing import Dict, List, Optional, Tuple
-import joblib
-import os
 import warnings
 warnings.filterwarnings('ignore')
 
-import config
+from . import config
 
 # =========================================================
 # 0. Basic helpers (from your initial code)
@@ -45,7 +43,7 @@ def log_growth(series: pd.Series) -> pd.Series:
 def seasonal_difference(series: pd.Series, period: int = 12) -> pd.Series:
     return series - series.shift(period)
 
-def wavelet_denoise_series(series: pd.Series, wavelet: str = WAVELET, level: int = WAVELET_LEVEL) -> pd.Series:
+def wavelet_denoise_series(series: pd.Series, wavelet: str = config.WAVELET, level: int = config.WAVELET_LEVEL) -> pd.Series:
     """Denoise by applying wavelet thresholding and reconstructing the signal."""
     x = series.fillna(method="ffill").fillna(method="bfill").values
     coeffs = pywt.wavedec(x, wavelet=wavelet, level=level)
@@ -354,10 +352,10 @@ class TimeGradDataModule:
 
     def __init__(self,
                  data_dict: Dict[str, pd.DataFrame],
-                 seq_len: int = DEFAULT_SEQ_LEN,
-                 forecast_horizon: int = DEFAULT_HORIZON,
-                 batch_size: int = DEFAULT_BATCH,
-                 pca_variance: float = PCA_VARIANCE,
+                 seq_len: int = config.DEFAULT_SEQ_LEN,
+                 forecast_horizon: int = config.DEFAULT_HORIZON,
+                 batch_size: int = config.DEFAULT_BATCH,
+                 pca_variance: float = config.PCA_VARIANCE,
                  device: str = "cpu"):
         """
         data_dict keys required: target, market, daily_macro, monthly_macro, quarterly_macro
@@ -487,7 +485,7 @@ class TimeGradDataModule:
     # ---------------------------
     # Split into train/val/test chronologically (on merged_raw)
     # ---------------------------
-    def split_chronologically(self, train_ratio: float = TRAIN_RATIO, val_ratio: float = VAL_RATIO) -> Tuple[pd.DataFrame,pd.DataFrame,pd.DataFrame]:
+    def split_chronologically(self, train_ratio: float = config.TRAIN_RATIO, val_ratio: float = config.VAL_RATIO) -> Tuple[pd.DataFrame,pd.DataFrame,pd.DataFrame]:
         if not hasattr(self, "merged_raw"):
             self.preprocess_raw_merge()
         n = len(self.merged_raw)
@@ -762,7 +760,7 @@ class TimeGradDataModule:
 # =========================================================
 class TimeGradDataset(Dataset):
     def __init__(self, df: pd.DataFrame, target_cols: List[str], cond_cols: List[str],
-                 seq_len: int = DEFAULT_SEQ_LEN, forecast_horizon: int = DEFAULT_HORIZON, device: str = "cpu"):
+                 seq_len: int = config.DEFAULT_SEQ_LEN, forecast_horizon: int = config.DEFAULT_HORIZON, device: str = "cpu"):
         self.df = df.dropna(subset=target_cols + cond_cols)
         self.target_cols = target_cols
         self.cond_cols = cond_cols
