@@ -328,6 +328,9 @@ def merge_all_blocks_unified(
     # --- Step 5: concatenate all blocks ---
     merged_df = pd.concat([daily_macro, monthly_aligned_daily, quarterly_aligned_daily, t, mkt], axis=1)
 
+    # --- Step 6: Final fill to handle cold-start NaNs ---
+    # bfill() handles NaNs at the beginning of the series where ffill has no past data.
+    merged_df = merged_df.bfill()
     # drop columns that are all NaN
     merged_df = merged_df.dropna(how="all")
 

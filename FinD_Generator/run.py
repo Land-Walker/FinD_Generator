@@ -37,3 +37,22 @@ print("\n🔍 Inspecting a sample batch from the train dataloader:")
 sample_batch = next(iter(train_loader))
 for key, tensor in sample_batch.items():
     print(f"  - {key}: {tensor.dtype}, {tensor.shape}")
+
+# ===========================================
+# 6. (Optional) Save processed data to CSV
+# ===========================================
+import os
+from src import config
+
+print("\n💾 Saving processed data splits to CSV...")
+train_path = os.path.join(config.PROCESSED_DATA_DIR, "train_processed.csv")
+val_path = os.path.join(config.PROCESSED_DATA_DIR, "val_processed.csv")
+test_path = os.path.join(config.PROCESSED_DATA_DIR, "test_processed.csv")
+
+dm.train_transformed_full.to_csv(train_path)
+dm.val_transformed_full.to_csv(val_path)
+dm.test_transformed_full.to_csv(test_path)
+
+print(f"✅ Saved train data to {train_path}")
+print(f"✅ Saved validation data to {val_path}")
+print(f"✅ Saved test data to {test_path}")
