@@ -184,16 +184,16 @@ def process_monthly_macro_raw(monthly_macro_df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     # CPI -> month-on-month (or pct change)
     if 'cpi' in df.columns:
-        out['cpi_mom'] = df['cpi'].pct_change()
+        out['cpi_mom'] = df['cpi'].pct_change().fillna(0)
     # unemployment detrend (rolling 12 mean subtract)
     if 'unemployment' in df.columns:
-        out['unemployment_detrend'] = df['unemployment'] - df['unemployment'].rolling(12, min_periods=1).mean()
+        out['unemployment_detrend'] = (df['unemployment'] - df['unemployment'].rolling(12, min_periods=1).mean()).fillna(0)
     # interest rate -> rate of change (diff)
     if 'interest_rate' in df.columns:
-        out['interest_rate_diff'] = df['interest_rate'].diff()
+        out['interest_rate_diff'] = df['interest_rate'].diff().fillna(0)
     # trade balance -> seasonal difference (default 12)
     if 'trade_balance' in df.columns:
-        out['trade_balance_seasdiff'] = seasonal_difference(df['trade_balance'], period=12)
+        out['trade_balance_seasdiff'] = seasonal_difference(df['trade_balance'], period=12).fillna(0)
     return out
 
 
@@ -385,6 +385,9 @@ class TimeGradDataModule:
         self.val_df = None
         self.test_df = None
 
+        # Placeholders for transformed splits
+        self.train_transformed, self.val_transformed, self.test_transformed = {}, {}, {}
+
         # Align all macro data safely (avoids leakage)
         # Store the aligned macro data back into the data_dict
         print("🔧 [Init] Aligning and preparing macroeconomic data...")
@@ -497,6 +500,18 @@ class TimeGradDataModule:
         print(f"📊 [Split] Dataset split into Train ({len(self.train_df)}), Val ({len(self.val_df)}), Test ({len(self.test_df)}).\n")
         return self.train_df, self.val_df, self.test_df
 
+    def preprocess_and_split(self, train_ratio: float = config.TRAIN_RATIO, val_ratio: float = config.VAL_RATIO):
+        """
+        New main pipeline function.
+        1. Builds raw blocks.
+        2. Merges, adds features, and labels regimes.
+        3. Splits into train/val/test.
+        4. Fits scalers/PCA on train and transforms all splits.
+        """
+        if not hasattr(self, "merged_raw"):
+            self.preprocess_raw_merge()
+        self.split_chronologically(train_ratio, val_ratio)
+        self.fit_transform_train()
     # ---------------------------
     # Fit scalers and PCA on TRAIN, transform all splits
     # ---------------------------
@@ -506,8 +521,8 @@ class TimeGradDataModule:
                         daily_macro_cols: Optional[List[str]] = None,
                         monthly_macro_cols: Optional[List[str]] = None,
                         quarterly_macro_cols: Optional[List[str]] = None):
-        if self.train_df is None:
-            self.split_chronologically()
+        if self.train_df is None or self.val_df is None or self.test_df is None:
+            raise RuntimeError("You must call `split_chronologically` before `fit_transform_train`.")
 
         df_train = self.train_df
         df_all = self.merged_raw
@@ -705,14 +720,15 @@ class TimeGradDataModule:
             return df
 
         # transform each split and keep the results
-        self.train_transformed = transform_df(self.train_df)
-        self.val_transformed = transform_df(self.val_df)
-        self.test_transformed = transform_df(self.test_df)
+        # The result is a single DF with all transformed columns. We will split them in the dataset.
+        self.train_transformed_full = transform_df(self.train_df)
+        self.val_transformed_full = transform_df(self.val_df)
+        self.test_transformed_full = transform_df(self.test_df)
 
         # Debug: shapes after transform
-        print(f"[ _transform_all_splits ] train_transformed rows: {len(self.train_transformed)} cols: {self.train_transformed.shape[1]}")
-        print(f"[ _transform_all_splits ] val_transformed rows:   {len(self.val_transformed)} cols: {self.val_transformed.shape[1]}")
-        print(f"[ _transform_all_splits ] test_transformed rows:  {len(self.test_transformed)} cols: {self.test_transformed.shape[1]}")
+        print(f"[ _transform_all_splits ] train_transformed rows: {len(self.train_transformed_full)} cols: {self.train_transformed_full.shape[1]}")
+        print(f"[ _transform_all_splits ] val_transformed rows:   {len(self.val_transformed_full)} cols: {self.val_transformed_full.shape[1]}")
+        print(f"[ _transform_all_splits ] test_transformed rows:  {len(self.test_transformed_full)} cols: {self.test_transformed_full.shape[1]}")
 
     # ---------------------------
     # Datasets / Dataloaders
@@ -720,7 +736,7 @@ class TimeGradDataModule:
     def get_feature_columns(self) -> Tuple[List[str], List[str]]:
         """Return target columns (x) and conditioning columns (c) to be used by TimeGradDataset.
            Prioritize PCA-generated columns. """
-        df = self.train_transformed if hasattr(self, 'train_transformed') else self.merged_raw
+        df = self.train_transformed_full if hasattr(self, 'train_transformed_full') else self.merged_raw
         # target PCA columns
         target_cols = [c for c in df.columns if c.startswith('target_pca_')]
         # conditioning: all other numeric columns except x_future placeholders
@@ -734,16 +750,57 @@ class TimeGradDataModule:
 
         return target_cols, cond_cols
 
+    def get_feature_columns_by_type(self) -> Dict[str, List[str]]:
+        """Returns a dictionary of column names for each dataset type."""
+        df = self.train_transformed_full if hasattr(self, 'train_transformed_full') else self.merged_raw
+
+        target_cols = [c for c in df.columns if c.startswith('target_pca_')]
+
+        daily_cols = [c for c in df.columns if c.startswith('market_pca_') or c.startswith('daily_')]
+        if 'volume_scaled' in df.columns:
+            daily_cols.append('volume_scaled')
+
+        calendar_cols = [
+            'day_of_week',
+            'month',
+            'quarter',
+            'year',
+            'is_month_end',
+            'is_quarter_end',
+            'month_sin',
+            'month_cos',
+            'dow_sin',
+            'dow_cos',
+            'quarter_sin',
+            'quarter_cos'
+        ]
+        daily_cols.extend([c for c in calendar_cols if c in df.columns])
+
+        monthly_cols = [c for c in df.columns if c.startswith('monthly_pca_') or c.startswith('quarterly_pca_')]
+
+        regime_cols = [c for c in df.columns if c.startswith(('market_regime_', 'vol_regime_', 'macro_regime_'))]
+
+        return {
+            "target": target_cols,
+            "daily": daily_cols,
+            "monthly": monthly_cols,
+            "regime": regime_cols
+        }
+
     def build_datasets(self) -> Tuple[Dataset, Dataset, Dataset]:
-        if not hasattr(self, 'train_transformed'):
+        if not hasattr(self, 'train_transformed_full'):
             raise RuntimeError("Call fit_transform_train(...) before build_datasets()")
-        target_cols, cond_cols = self.get_feature_columns()
-        self.train_set = TimeGradDataset(self.train_transformed, target_cols, cond_cols,
-                                         seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
-        self.val_set = TimeGradDataset(self.val_transformed, target_cols, cond_cols,
-                                       seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
-        self.test_set = TimeGradDataset(self.test_transformed, target_cols, cond_cols,
-                                        seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
+
+        feature_cols = self.get_feature_columns_by_type()
+
+        self.train_set = ConditionalTimeGradDataset(self.train_transformed_full, feature_cols,
+                                                    seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
+        self.val_set = ConditionalTimeGradDataset(self.val_transformed_full, feature_cols,
+                                                  seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
+        self.test_set = ConditionalTimeGradDataset(self.test_transformed_full, feature_cols,
+                                                   seq_len=self.seq_len, forecast_horizon=self.forecast_horizon, device=self.device)
+
+        print(f"✅ Datasets built. Train: {len(self.train_set)}, Val: {len(self.val_set)}, Test: {len(self.test_set)} samples.")
         return self.train_set, self.val_set, self.test_set
 
     def train_dataloader(self):
@@ -756,8 +813,9 @@ class TimeGradDataModule:
         return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False)
 
 # =========================================================
-# 5. TimeGradDataset
+# 5. PyTorch Datasets
 # =========================================================
+""" leave just in case if the new dataset module works erroneously
 class TimeGradDataset(Dataset):
     def __init__(self, df: pd.DataFrame, target_cols: List[str], cond_cols: List[str],
                  seq_len: int = config.DEFAULT_SEQ_LEN, forecast_horizon: int = config.DEFAULT_HORIZON, device: str = "cpu"):
@@ -787,4 +845,61 @@ class TimeGradDataset(Dataset):
             "c_hist": torch.tensor(c_hist, device=self.device),
             "x_future": torch.tensor(x_future, device=self.device),
             "time": self.time_index[idx: idx + self.seq_len + self.forecast_horizon]
+        }
+"""
+        
+class ConditionalTimeGradDataset(Dataset):
+    """
+    Dataset designed for the ConditionalTimeGrad model.
+    It samples from four distinct, pre-processed data sources:
+    1. Target series (to be predicted)
+    2. Daily dynamic conditioning features
+    3. Monthly dynamic conditioning features
+    4. Static conditioning features (regime labels)
+    """
+    def __init__(self, df: pd.DataFrame, feature_cols: Dict[str, List[str]],
+                 seq_len: int = config.DEFAULT_SEQ_LEN, forecast_horizon: int = config.DEFAULT_HORIZON, device: str = "cpu"):
+
+        self.seq_len = seq_len
+        self.forecast_horizon = forecast_horizon
+        self.device = device
+
+        # Extract numpy arrays for each feature set
+        self.target_data = df[feature_cols["target"]].values.astype(np.float32)
+        self.daily_data = df[feature_cols["daily"]].values.astype(np.float32)
+        self.monthly_data = df[feature_cols["monthly"]].values.astype(np.float32)
+        self.regime_data = df[feature_cols["regime"]].values.astype(np.float32)
+
+        self.n_samples = len(df) - seq_len - forecast_horizon + 1
+        if self.n_samples < 1:
+            raise ValueError("Not enough data to build any sequence with given seq_len and forecast_horizon.")
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        # History window
+        hist_start, hist_end = idx, idx + self.seq_len
+        # Future window
+        future_start, future_end = hist_end, hist_end + self.forecast_horizon
+
+        # 1. Target data (history and future)
+        x_hist = self.target_data[hist_start:hist_end]
+        x_future = self.target_data[future_start:future_end]
+
+        # 2. Dynamic conditioning features (history only)
+        daily_hist = self.daily_data[hist_start:hist_end]
+        monthly_hist = self.monthly_data[hist_start:hist_end]
+        # Concatenate daily and monthly features to form the full dynamic context
+        cond_dynamic = np.concatenate([daily_hist, monthly_hist], axis=1)
+
+        # 3. Static conditioning features (regime labels)
+        # Use the regime from the last day of the history window as the "instruction"
+        cond_static = self.regime_data[hist_end - 1]
+
+        return {
+            "x_future": torch.tensor(x_future, device=self.device),
+            "x_hist": torch.tensor(x_hist, device=self.device),
+            "cond_dynamic": torch.tensor(cond_dynamic, device=self.device),
+            "cond_static": torch.tensor(cond_static, device=self.device),
         }

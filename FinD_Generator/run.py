@@ -1,5 +1,5 @@
-#import sys
-#sys.path.append('.')
+import sys
+sys.path.append('\workspaces\AI_FinSys\FinD_Generator')
 
 from src.data_collector import DataCollector
 from src.data_loader import TimeGradDataModule
@@ -11,35 +11,29 @@ dfs = collector.collect_all_data()  # returns dict of DataFrames
 # ===========================================
 # 2. Initialize DataModule
 # ===========================================
-dm = TimeGradDataModule(data_dict=dfs)
+dm = TimeGradDataModule(data_dict=dfs, device="cpu") # or "cuda" if available
 
 # ===========================================
-# 3. Build raw blocks and preprocess
+# 3. Preprocess, split, and transform data
 # ===========================================
-raw_blocks = dm.build_raw_blocks()
-print("✅ Raw block keys:", list(raw_blocks.keys()))
-
-# Merge, label regimes, add calendar features
-merged_df = dm.preprocess_raw_merge()
-print("✅ Merged raw shape:", merged_df.shape)
-print(merged_df.head(3))
-
-# ===========================================
-# 4. Split into train/val/test
-# ===========================================
-train_df, val_df, test_df = dm.split_chronologically()
-print(f"✅ Split sizes: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
+# This single method handles:
+# - Building raw blocks (wavelet, returns, etc.)
+# - Merging all data sources
+# - Adding calendar features and regime labels
+# - Splitting into train/val/test sets
+# - Fitting scalers/PCA on the training set and transforming all sets
+dm.preprocess_and_split()
 
 # ===========================================
-# 5. Fit scalers and PCA (train-only)
+# 4. Build Datasets and Dataloaders
 # ===========================================
-dm.fit_transform_train()
+dm.build_datasets()
+train_loader = dm.train_dataloader()
 
 # ===========================================
-# 6. Inspect transformed data
+# 5. Inspect a sample batch
 # ===========================================
-print("✅ Train transformed shape:", dm.train_transformed.shape)
-print(dm.train_transformed.filter(like="pca").head(3))
-
-# (Optional) Save outputs for model training
-dm.train_transformed.to_csv("train_processed.csv")
+print("\n🔍 Inspecting a sample batch from the train dataloader:")
+sample_batch = next(iter(train_loader))
+for key, tensor in sample_batch.items():
+    print(f"  - {key}: {tensor.dtype}, {tensor.shape}")

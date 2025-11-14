@@ -9,7 +9,7 @@ warnings.filterwarnings('ignore')
 
 from . import config
 
-class DataCollector:
+class DataCollector: 
     def __init__(self, data_dir: str = config.RAW_DATA_DIR):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
