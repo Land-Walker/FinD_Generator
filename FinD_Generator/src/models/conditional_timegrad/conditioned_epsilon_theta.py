@@ -23,7 +23,8 @@ class ConditionedEpsilonTheta(nn.Module):
         cond_static_dim: int,
         seq_len: int,
         prediction_length: int,
-        embed_dim: int = 32,
+        embed_dim: int = 64,
+        attn_heads: int = 4,
     ) -> None:
         super().__init__()
 
@@ -31,19 +32,15 @@ class ConditionedEpsilonTheta(nn.Module):
         self.seq_len = seq_len
         self.prediction_length = prediction_length
 
-        self.dynamic_encoder = nn.Sequential(
-            nn.Linear(cond_dynamic_dim * seq_len, 128),
-            nn.ReLU(),
-            nn.Linear(128, embed_dim),
-        )
+        self.dynamic_encoder = nn.Linear(cond_dynamic_dim, embed_dim)
+        self.static_encoder = nn.Linear(cond_static_dim, embed_dim)
 
-        self.static_encoder = nn.Sequential(
-            nn.Linear(cond_static_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, embed_dim),
-        )
+        self.query_proj = nn.Conv1d(base_epsilon.input_size, embed_dim, kernel_size=1)
+        self.context_proj = nn.Conv1d(embed_dim, base_epsilon.input_size, kernel_size=1)
 
-        self.cond_project = nn.Linear(embed_dim * 2, prediction_length)
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=embed_dim, num_heads=attn_heads, batch_first=False
+        )
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, cond: Dict[str, torch.Tensor]):
         """Forward pass with conditioning.
@@ -55,19 +52,24 @@ class ConditionedEpsilonTheta(nn.Module):
                 ``"static"`` -> ``[B, static_dim]``.
         """
 
-        batch_size = x.size(0)
+        batch_size, _, horizon = x.shape
 
-        dyn = cond["dynamic"].reshape(batch_size, -1)
-        dyn_emb = self.dynamic_encoder(dyn)
+        dyn = cond["dynamic"]  # [B, seq_len, cond_dim]
+        static = cond["static"]  # [B, static_dim]
 
-        static_emb = self.static_encoder(cond["static"])
+        dyn_tokens = self.dynamic_encoder(dyn)  # [B, seq_len, embed_dim]
+        static_token = self.static_encoder(static).unsqueeze(1)  # [B, 1, embed_dim]
 
-        joint = torch.cat([dyn_emb, static_emb], dim=-1)
-        cond_vec = self.cond_project(joint)
+        cond_tokens = torch.cat([dyn_tokens, static_token], dim=1)  # [B, seq_len+1, embed_dim]
+        cond_tokens = cond_tokens.transpose(0, 1)  # [cond_seq, B, embed_dim]
 
-        # Expand to match x's channel dimension
-        cond_vec = cond_vec.unsqueeze(1)  # [B, 1, horizon]
+        query = self.query_proj(x)  # [B, embed_dim, horizon]
+        query = query.permute(2, 0, 1)  # [horizon, B, embed_dim]
 
-        x_cond = x + cond_vec
+        attn_out, _ = self.cross_attention(query, cond_tokens, cond_tokens)
+        attn_out = attn_out.permute(1, 2, 0)  # [B, embed_dim, horizon]
+
+        cond_residual = self.context_proj(attn_out)  # [B, C, horizon]
+        x_cond = x + cond_residual
 
         return self.base(x_cond, t)

@@ -24,6 +24,8 @@ class ConditionalTimeGrad(nn.Module):
         beta_schedule: str = "linear",
         residual_layers: int = 6,
         residual_channels: int = 32,
+        cond_embed_dim: int = 64,
+        cond_attn_heads: int = 4,
     ) -> None:
         super().__init__()
 
@@ -40,6 +42,8 @@ class ConditionalTimeGrad(nn.Module):
             cond_static_dim=cond_static_dim,
             seq_len=seq_len,
             prediction_length=prediction_length,
+            embed_dim=cond_embed_dim,
+            attn_heads=cond_attn_heads,
         )
 
         self.diffusion = GaussianDiffusion(
