@@ -1,8 +1,9 @@
 """Core TimeGrad components.
 
-This package intentionally keeps the vanilla TimeGrad building blocks
-separate from any conditioning logic. Copy the PyTorch TS implementations
-(e.g., GaussianDiffusion, EpsilonTheta) into this package.
+This package intentionally keeps the vanilla TimeGrad building blocks separate
+from any conditioning logic. The implementations mirror the PyTorchTS
+reference so they can serve as a faithful base for both the vanilla and
+conditional variants.
 """
 
 __all__ = [

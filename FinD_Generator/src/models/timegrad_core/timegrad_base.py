@@ -2,8 +2,9 @@
 
 The module wraps ``GaussianDiffusion`` and ``EpsilonTheta`` in a minimal
 ``nn.Module`` so it can be integrated into standard PyTorch training loops.
-Replace the placeholder implementations in ``gaussian_diffusion.py`` and
-``epsilon_theta.py`` with the originals from PTS to obtain a working model.
+The diffusion and denoiser components mirror the original TimeGrad defaults
+while staying framework-agnostic so conditioning wrappers can be layered on top
+without altering the core behavior.
 """
 from __future__ import annotations
 

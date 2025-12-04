@@ -1,13 +1,14 @@
 """Gaussian diffusion implementation for TimeGrad-style models.
 
-This module is adapted to be a faithful, self-contained PyTorch version of the
-PTS implementation used by TimeGrad. It supports training-time loss
-computation with optional conditioning routed through the provided denoising
-network.
+This module mirrors the functionality provided by the original TimeGrad
+implementation in PyTorchTS. It supports both training-time loss computation
+and ancestral sampling, and it keeps the conditioning interface compatible with
+the denoising network so the conditional TimeGrad variant can reuse the same
+core logic.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -60,13 +61,43 @@ class GaussianDiffusion(nn.Module):
         self.register_buffer("alphas", alphas)
         self.register_buffer("alphas_cumprod", alphas_cumprod)
         self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
-        self.register_buffer(
-            "sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod)
-        )
+        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
         self.register_buffer(
             "sqrt_one_minus_alphas_cumprod",
             torch.sqrt(1.0 - alphas_cumprod),
         )
+        self.register_buffer(
+            "sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod)
+        )
+        self.register_buffer(
+            "sqrt_recipm1_alphas_cumprod",
+            torch.sqrt(1.0 / alphas_cumprod - 1),
+        )
+
+        # Posterior coefficients used for sampling
+        posterior_variance = (
+            betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        )
+        # Numerically stable clip to avoid log(0)
+        posterior_log_variance_clipped = torch.log(
+            torch.clamp(posterior_variance, min=1e-20)
+        )
+
+        posterior_mean_coef1 = (
+            betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        )
+        posterior_mean_coef2 = (
+            (1.0 - alphas_cumprod_prev)
+            * torch.sqrt(alphas)
+            / (1.0 - alphas_cumprod)
+        )
+
+        self.register_buffer("posterior_variance", posterior_variance)
+        self.register_buffer(
+            "posterior_log_variance_clipped", posterior_log_variance_clipped
+        )
+        self.register_buffer("posterior_mean_coef1", posterior_mean_coef1)
+        self.register_buffer("posterior_mean_coef2", posterior_mean_coef2)
 
     @torch.no_grad()
     def q_sample(
@@ -98,6 +129,8 @@ class GaussianDiffusion(nn.Module):
         self,
         x_start: torch.Tensor,
         cond: Optional[dict[str, Any]] = None,
+        t: Optional[torch.Tensor] = None,
+        noise: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute the diffusion training loss.
 
@@ -114,8 +147,10 @@ class GaussianDiffusion(nn.Module):
         batch_size = x_start.size(0)
         device = x_start.device
 
-        t = torch.randint(0, self.diff_steps, (batch_size,), device=device)
-        noise = torch.randn_like(x_start)
+        if t is None:
+            t = torch.randint(0, self.diff_steps, (batch_size,), device=device)
+        if noise is None:
+            noise = torch.randn_like(x_start)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -133,3 +168,89 @@ class GaussianDiffusion(nn.Module):
 
         loss = nn.functional.mse_loss(pred_noise, noise)
         return loss
+
+    def predict_start_from_noise(
+        self, x_t: torch.Tensor, t: torch.Tensor, noise: torch.Tensor
+    ) -> torch.Tensor:
+        """Reconstruct ``x_0`` from a noisy sample ``x_t`` and predicted noise."""
+
+        return _extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - _extract(
+            self.sqrt_recipm1_alphas_cumprod, t, x_t.shape
+        ) * noise
+
+    def p_mean_variance(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        cond: Optional[dict[str, Any]] = None,
+        clip_denoised: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute the reverse diffusion mean/variance at timestep ``t``.
+
+        Returns the model mean, variance, log-variance, and the reconstructed
+        ``x_start`` prediction. This mirrors the utilities used by the original
+        TimeGrad sampler and is needed for both training diagnostics and
+        ancestral sampling.
+        """
+
+        if cond is None:
+            pred_noise = self.denoise_fn(x, t)
+        else:
+            pred_noise = self.denoise_fn(x, t, cond)
+
+        x_recon = self.predict_start_from_noise(x, t, pred_noise)
+        if clip_denoised:
+            x_recon = torch.clamp(x_recon, -1.0, 1.0)
+
+        model_mean = _extract(self.posterior_mean_coef1, t, x.shape) * x_recon + _extract(
+            self.posterior_mean_coef2, t, x.shape
+        ) * x
+        model_variance = _extract(self.posterior_variance, t, x.shape)
+        model_log_variance = _extract(self.posterior_log_variance_clipped, t, x.shape)
+        return model_mean, model_variance, model_log_variance, x_recon
+
+    def p_sample(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        cond: Optional[dict[str, Any]] = None,
+        clip_denoised: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Take one reverse diffusion step."""
+
+        model_mean, _, model_log_variance, x_recon = self.p_mean_variance(
+            x, t, cond=cond, clip_denoised=clip_denoised
+        )
+        noise = torch.randn_like(x)
+        nonzero_mask = (t != 0).float().reshape((x.shape[0],) + (1,) * (len(x.shape) - 1))
+        sample = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+        return sample, x_recon
+
+    @torch.no_grad()
+    def p_sample_loop(
+        self,
+        shape: torch.Size,
+        cond: Optional[dict[str, Any]] = None,
+        clip_denoised: bool = True,
+    ) -> torch.Tensor:
+        """Generate samples by iterating the reverse diffusion process."""
+
+        device = self.betas.device
+        img = torch.randn(shape, device=device)
+        for i in reversed(range(self.diff_steps)):
+            t = torch.full((shape[0],), i, device=device, dtype=torch.long)
+            img, _ = self.p_sample(img, t, cond=cond, clip_denoised=clip_denoised)
+        return img
+
+    @torch.no_grad()
+    def sample(
+        self,
+        batch_size: int,
+        horizon: int,
+        cond: Optional[dict[str, Any]] = None,
+        clip_denoised: bool = True,
+    ) -> torch.Tensor:
+        """Convenience wrapper to sample forecasts with shape ``[B, C, horizon]``."""
+
+        shape = (batch_size, self.input_size, horizon)
+        return self.p_sample_loop(shape=shape, cond=cond, clip_denoised=clip_denoised)
