@@ -34,6 +34,7 @@ class ConditionalTimeGrad(nn.Module):
             prediction_length=prediction_length,
             residual_layers=residual_layers,
             residual_channels=residual_channels,
+            cond_channels=cond_embed_dim,
         )
 
         self.epsilon_theta = ConditionedEpsilonTheta(

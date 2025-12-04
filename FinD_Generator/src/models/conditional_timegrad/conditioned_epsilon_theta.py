@@ -72,4 +72,4 @@ class ConditionedEpsilonTheta(nn.Module):
         cond_residual = self.context_proj(attn_out)  # [B, C, horizon]
         x_cond = x + cond_residual
 
-        return self.base(x_cond, t)
+        return self.base(x_cond, t, cond=attn_out)
