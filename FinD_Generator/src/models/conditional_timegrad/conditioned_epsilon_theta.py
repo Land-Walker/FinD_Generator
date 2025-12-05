@@ -47,7 +47,11 @@ class ConditionedEpsilonTheta(nn.Module):
             batch_first=False,
         )
 
-        self.rel_pos_bias = _RelativePositionBias(max_distance=max(seq_len, prediction_length))
+        # Use a generous distance budget so sliding-window conditioning in
+        # autoregressive loops does not clip relative offsets when the
+        # effective dynamic length varies slightly from initialization.
+        rel_max = seq_len + prediction_length
+        self.rel_pos_bias = _RelativePositionBias(max_distance=rel_max)
 
         # Convolutional upsampling followed by optional interpolation for exact alignment.
         self.cond_upsampler = nn.Sequential(
@@ -100,29 +104,30 @@ class ConditionedEpsilonTheta(nn.Module):
                 "Batch size mismatch between noisy input and conditioning features"
             )
 
-        if dyn.shape[1] != self.seq_len:
-            raise ValueError(
-                f"Expected dynamic conditioning length {self.seq_len}, got {dyn.shape[1]}"
-            )
+        dynamic_len = dyn.shape[1]
+        if dynamic_len == 0:
+            raise ValueError("Dynamic conditioning must have non-zero length")
 
-        dyn_tokens = self.dynamic_encoder(dyn)  # [B, seq_len, embed_dim]
+        dyn_tokens = self.dynamic_encoder(dyn)  # [B, dynamic_len, embed_dim]
         static_token = self.static_encoder(static).unsqueeze(1)  # [B, 1, embed_dim]
         static_film = self.static_film(static_token.squeeze(1))  # [B, C]
 
-        cond_tokens = torch.cat([dyn_tokens, static_token], dim=1)  # [B, seq_len+1, embed_dim]
+        cond_tokens = torch.cat([dyn_tokens, static_token], dim=1)  # [B, dynamic_len+1, embed_dim]
         cond_tokens = cond_tokens.transpose(0, 1)  # [cond_seq, B, embed_dim]
 
         query = self.query_proj(x)  # [B, embed_dim, horizon]
         query = query.permute(2, 0, 1)  # [horizon, B, embed_dim]
 
-        rel_bias = self.rel_pos_bias(query_len=horizon, cond_len=cond_tokens.size(0))
+        cond_len = cond_tokens.size(0)
+        rel_bias = self.rel_pos_bias(query_len=horizon, cond_len=cond_len)
         causal_mask = _causal_mask(
             query_len=horizon,
-            cond_len=cond_tokens.size(0),
-            dynamic_tokens=self.seq_len,
+            cond_len=cond_len,
+            dynamic_tokens=dynamic_len,
+            dtype=query.dtype,
             device=query.device,
         )
-        attn_mask = rel_bias + causal_mask
+        attn_mask = rel_bias.to(query.dtype) + causal_mask
         attn_out, _ = self.cross_attention(query, cond_tokens, cond_tokens, attn_mask=attn_mask)
         attn_out = attn_out.permute(1, 2, 0)  # [B, embed_dim, horizon]
 
@@ -167,7 +172,11 @@ class _RelativePositionBias(nn.Module):
 
 
 def _causal_mask(
-    query_len: int, cond_len: int, dynamic_tokens: int, device: torch.device
+    query_len: int,
+    cond_len: int,
+    dynamic_tokens: int,
+    dtype: torch.dtype,
+    device: torch.device,
 ) -> torch.Tensor:
     """Create an additive causal mask for attention.
 
@@ -176,17 +185,25 @@ def _causal_mask(
     is static and remains fully visible.
     """
 
-    mask = torch.zeros((query_len, cond_len), device=device)
+    if dynamic_tokens < 0:
+        raise ValueError("dynamic_tokens must be non-negative")
+
+    static_idx = cond_len - 1
+    if dynamic_tokens > static_idx:
+        raise ValueError(
+            "dynamic_tokens exceeds available conditioning tokens (static token is assumed to be last)"
+        )
+
+    mask = torch.zeros((query_len, cond_len), device=device, dtype=dtype)
 
     # Dynamic tokens are indices [0, dynamic_tokens - 1]; static token is the last column.
-    static_idx = cond_len - 1
+    if dynamic_tokens > 0:
+        q_ids = torch.arange(query_len, device=device).unsqueeze(1)
+        dyn_ids = torch.arange(dynamic_tokens, device=device).unsqueeze(0)
 
-    q_ids = torch.arange(query_len, device=device).unsqueeze(1)
-    dyn_ids = torch.arange(dynamic_tokens, device=device).unsqueeze(0)
-
-    allowed_until = torch.clamp(q_ids, max=dynamic_tokens - 1)
-    block = dyn_ids > allowed_until
-    mask[:, :dynamic_tokens] = mask[:, :dynamic_tokens].masked_fill(block, float("-inf"))
+        allowed_until = torch.clamp(q_ids, max=dynamic_tokens - 1)
+        block = dyn_ids > allowed_until
+        mask[:, :dynamic_tokens] = mask[:, :dynamic_tokens].masked_fill(block, float("-inf"))
 
     # Static column remains zero (no masking).
     if static_idx >= 0:
