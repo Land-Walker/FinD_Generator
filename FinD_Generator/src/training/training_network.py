@@ -51,12 +51,49 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
         self.target_dim = target_dim
         self.scale_eps = scale_eps
 
+        # Keep track of inbound conditioning dimensions before augmentation.
+        self.input_cond_dynamic_dim = cond_dynamic_dim
+        self.input_cond_static_dim = cond_static_dim
+        self.cond_embed_dim = cond_embed_dim
+
+        # History encoder turns past targets into conditioning tokens so the
+        # denoiser can leverage cross-attention, relative position bias, causal
+        # masking, FiLM modulation, and learned alignment modules downstream.
+        self.history_encoder = nn.Sequential(
+            nn.Conv1d(
+                target_dim,
+                cond_embed_dim,
+                kernel_size=3,
+                padding=1,
+                padding_mode="circular",
+            ),
+            nn.LeakyReLU(0.4, inplace=True),
+            nn.Conv1d(
+                cond_embed_dim,
+                cond_embed_dim,
+                kernel_size=3,
+                padding=1,
+                padding_mode="circular",
+            ),
+            nn.LeakyReLU(0.4, inplace=True),
+        )
+
+        # Summary pooling feeds into static FiLM modulation alongside provided
+        # static features.
+        self.history_pool = nn.AdaptiveAvgPool1d(1)
+
+        # Augment conditioning dims with learned history tokens so the model's
+        # cross-attention stack can consume both exogenous signals and encoded
+        # past targets.
+        combined_cond_dynamic_dim = cond_dynamic_dim + cond_embed_dim
+        combined_cond_static_dim = cond_static_dim + cond_embed_dim
+
         self.model = ConditionalTimeGrad(
             target_dim=target_dim,
             prediction_length=prediction_length,
             seq_len=context_length,
-            cond_dynamic_dim=cond_dynamic_dim,
-            cond_static_dim=cond_static_dim,
+            cond_dynamic_dim=combined_cond_dynamic_dim,
+            cond_static_dim=combined_cond_static_dim,
             diff_steps=diff_steps,
             beta_end=beta_end,
             beta_schedule=beta_schedule,
@@ -67,15 +104,18 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
             cond_attn_dropout=cond_attn_dropout,
         )
 
-    def _normalize_target(self, x_hist: torch.Tensor, x_future: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _normalize_target(
+        self, x_hist: torch.Tensor, x_future: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute per-series scaling statistics and normalize the target windows."""
 
         combined = torch.cat([x_hist, x_future], dim=1)  # [B, context+horizon, C]
         loc = combined.mean(dim=1, keepdim=True)
         scale = combined.std(dim=1, keepdim=True).clamp_min(self.scale_eps)
 
+        x_hist_norm = (x_hist - loc) / scale
         x_future_norm = (x_future - loc) / scale
-        return x_future_norm, loc, scale
+        return x_hist_norm, x_future_norm, loc, scale
 
     def _normalize_cond(
         self, cond_dynamic: torch.Tensor, cond_static: torch.Tensor
@@ -91,6 +131,37 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
         cond_static_norm = (cond_static - static_loc) / static_scale
 
         return cond_dynamic_norm, cond_static_norm
+
+    def _prepare_conditioning(
+        self,
+        x_hist_norm: torch.Tensor,
+        cond_dynamic_norm: torch.Tensor,
+        cond_static_norm: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Fuse history-derived tokens with provided conditioning signals."""
+
+        if cond_dynamic_norm.shape[-1] != self.input_cond_dynamic_dim:
+            raise ValueError(
+                f"Expected cond_dynamic dim {self.input_cond_dynamic_dim}, got {cond_dynamic_norm.shape[-1]}"
+            )
+        if cond_static_norm.shape[-1] != self.input_cond_static_dim:
+            raise ValueError(
+                f"Expected cond_static dim {self.input_cond_static_dim}, got {cond_static_norm.shape[-1]}"
+            )
+
+        # Encode history as dynamic tokens so downstream cross-attention and
+        # causal masking can exploit temporal structure and relative biases.
+        hist_tokens = self.history_encoder(x_hist_norm.transpose(1, 2))  # [B, E, T]
+        hist_tokens = hist_tokens.transpose(1, 2)  # [B, T, E]
+
+        # Concatenate learned history tokens with exogenous dynamic features.
+        cond_dynamic_aug = torch.cat([cond_dynamic_norm, hist_tokens], dim=-1)
+
+        # Static channel incorporates pooled history for FiLM modulation.
+        hist_summary = self.history_pool(hist_tokens.transpose(1, 2)).squeeze(-1)
+        cond_static_aug = torch.cat([cond_static_norm, hist_summary], dim=-1)
+
+        return cond_dynamic_aug, cond_static_aug
 
     def forward(
         self,
@@ -124,13 +195,19 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
                 f"Expected cond_dynamic length {self.context_length}, got {cond_dynamic.shape[1]}"
             )
 
-        x_future_norm, _, _ = self._normalize_target(x_hist, x_future)
-        cond_dynamic_norm, cond_static_norm = self._normalize_cond(cond_dynamic, cond_static)
+        x_hist_norm, x_future_norm, _, _ = self._normalize_target(x_hist, x_future)
+        cond_dynamic_norm, cond_static_norm = self._normalize_cond(
+            cond_dynamic, cond_static
+        )
+
+        cond_dynamic_aug, cond_static_aug = self._prepare_conditioning(
+            x_hist_norm, cond_dynamic_norm, cond_static_norm
+        )
 
         loss = self.model(
             x_future=x_future_norm,
-            cond_dynamic=cond_dynamic_norm,
-            cond_static=cond_static_norm,
+            cond_dynamic=cond_dynamic_aug,
+            cond_static=cond_static_aug,
         )
         return loss
 
@@ -158,13 +235,19 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
         batch_size = x_hist.size(0)
 
         # Use history statistics for rescaling generated samples back to data space.
-        dummy_future = torch.zeros(batch_size, self.prediction_length, self.target_dim, device=x_hist.device)
-        _, loc, scale = self._normalize_target(x_hist, dummy_future)
+        dummy_future = torch.zeros(
+            batch_size, self.prediction_length, self.target_dim, device=x_hist.device
+        )
+        x_hist_norm, _, loc, scale = self._normalize_target(x_hist, dummy_future)
         cond_dynamic_norm, cond_static_norm = self._normalize_cond(cond_dynamic, cond_static)
 
+        cond_dynamic_aug, cond_static_aug = self._prepare_conditioning(
+            x_hist_norm, cond_dynamic_norm, cond_static_norm
+        )
+
         # Repeat conditioning for multiple samples.
-        cond_dynamic_rep = cond_dynamic_norm.repeat(num_samples, 1, 1)
-        cond_static_rep = cond_static_norm.repeat(num_samples, 1)
+        cond_dynamic_rep = cond_dynamic_aug.repeat(num_samples, 1, 1)
+        cond_static_rep = cond_static_aug.repeat(num_samples, 1)
 
         cond = {"dynamic": cond_dynamic_rep, "static": cond_static_rep}
         samples = self.model.diffusion.sample(
