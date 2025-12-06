@@ -27,6 +27,24 @@ def sinusoidal_time_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor
     return emb
 
 
+def _circular_pad_safe(x: torch.Tensor, pad: int) -> torch.Tensor:
+    """Circular padding that tolerates pad sizes larger than the sequence length."""
+
+    if pad == 0:
+        return x
+
+    seq_len = x.size(-1)
+    # If padding exceeds the sequence length, tile the sequence enough times
+    if pad > seq_len:
+        repeat = pad // seq_len + 1
+        x = x.repeat(1, 1, repeat + 1)
+        seq_len = x.size(-1)
+
+    left = x[..., -pad:]
+    right = x[..., :pad]
+    return torch.cat([left, x, right], dim=-1)
+
+
 class ResidualBlock(nn.Module):
     def __init__(
         self,
@@ -37,15 +55,14 @@ class ResidualBlock(nn.Module):
         cond_channels: int | None = None,
     ) -> None:
         super().__init__()
-        padding = (kernel_size - 1) * dilation // 2
         self.dilated_conv = nn.Conv1d(
             channels,
             2 * channels,
             kernel_size,
-            padding=padding,
             dilation=dilation,
-            padding_mode="circular",
+            padding=0,
         )
+        self.padding = (kernel_size - 1) * dilation // 2
         self.time_proj = nn.Linear(time_emb_dim, 2 * channels)
         self.cond_proj = (
             nn.Conv1d(cond_channels, 2 * channels, kernel_size=1)
@@ -61,7 +78,8 @@ class ResidualBlock(nn.Module):
         time_emb: torch.Tensor,
         cond: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        h = self.dilated_conv(x)
+        padded = _circular_pad_safe(x, self.padding)
+        h = self.dilated_conv(padded)
         time_part = self.time_proj(time_emb).unsqueeze(-1)
         h = h + time_part
 
@@ -107,7 +125,11 @@ class EpsilonTheta(nn.Module):
         )
 
         base_dilations: List[int] = [1, 2, 4, 8]
-        dilations: List[int] = [base_dilations[i % len(base_dilations)] for i in range(residual_layers)]
+        max_dilation = max(1, prediction_length - 1)
+        dilations: List[int] = [
+            max(1, min(base_dilations[i % len(base_dilations)], max_dilation))
+            for i in range(residual_layers)
+        ]
         self.residual_blocks = nn.ModuleList(
             [
                 ResidualBlock(
