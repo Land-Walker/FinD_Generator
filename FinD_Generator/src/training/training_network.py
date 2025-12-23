@@ -19,6 +19,7 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+from torch.distributions import Normal, StudentT
 
 from src.models.conditional_timegrad import ConditionalTimeGrad
 
@@ -108,18 +109,51 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
             rnn_type=rnn_type,
         )
 
-    def _normalize_target(
-        self, x_hist: torch.Tensor, x_future: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute per-series scaling statistics and normalize the target windows."""
+    def _fit_student_t(self, x_hist: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        """Fit per-series Student-t parameters from historical windows.
+        Args:
+            x_hist: Historical target window ``[B, context_length, target_dim]``.
 
-        combined = torch.cat([x_hist, x_future], dim=1)  # [B, context+horizon, C]
-        loc = combined.mean(dim=1, keepdim=True)
-        scale = combined.std(dim=1, keepdim=True).clamp_min(self.scale_eps)
+        Returns:
+            Tuple of ``(df, loc, scale)`` each shaped ``[B, 1, target_dim]`` suitable for
+            broadcasting across time.
+        """
 
-        x_hist_norm = (x_hist - loc) / scale
-        x_future_norm = (x_future - loc) / scale
-        return x_hist_norm, x_future_norm, loc, scale
+        loc = x_hist.mean(dim=1, keepdim=True)
+        centered = x_hist - loc
+        m2 = centered.pow(2).mean(dim=1, keepdim=True).clamp_min(self.scale_eps)
+        m4 = centered.pow(4).mean(dim=1, keepdim=True)
+
+        # Method-of-moments estimate for degrees of freedom via excess kurtosis.
+        excess_kurtosis = m4 / (m2.pow(2) + self.scale_eps) - 3.0
+        positive_excess = excess_kurtosis.clamp_min(1e-3)
+        df = 6.0 / positive_excess + 4.0
+        df = torch.where(torch.isfinite(df), df, torch.full_like(df, 30.0))
+        df = df.clamp(min=3.0, max=200.0)
+
+        # Variance of Student-t: df/(df-2) * scale^2  -> scale = sqrt(var * (df-2)/df)
+        scale = torch.sqrt(m2 * (df - 2.0) / df).clamp_min(self.scale_eps)
+        return df, loc, scale
+
+    def _to_gaussian(
+        self, x: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Map Student-t returns to Gaussian space via CDF and probit."""
+
+        student = StudentT(df=df, loc=loc, scale=scale)
+        u = student.cdf(x).clamp(min=1e-6, max=1 - 1e-6)
+        z = Normal(0.0, 1.0).icdf(u)
+        return z
+
+    def _from_gaussian(
+        self, z: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        """Invert Gaussian samples back to the Student-t space."""
+
+        u = Normal(0.0, 1.0).cdf(z).clamp(min=1e-6, max=1 - 1e-6)
+        student = StudentT(df=df, loc=loc, scale=scale)
+        x = student.icdf(u)
+        return x
 
     def _normalize_cond(
         self, cond_dynamic: torch.Tensor, cond_static: torch.Tensor
@@ -199,7 +233,9 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
                 f"Expected cond_dynamic length {self.context_length}, got {cond_dynamic.shape[1]}"
             )
 
-        x_hist_norm, x_future_norm, _, _ = self._normalize_target(x_hist, x_future)
+        df, loc, scale = self._fit_student_t(x_hist)
+        x_hist_norm = self._to_gaussian(x_hist, df, loc, scale)
+        x_future_norm = self._to_gaussian(x_future, df, loc, scale)
         cond_dynamic_norm, cond_static_norm = self._normalize_cond(
             cond_dynamic, cond_static
         )
@@ -238,11 +274,9 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
 
         batch_size = x_hist.size(0)
 
-        # Use history statistics for rescaling generated samples back to data space.
-        dummy_future = torch.zeros(
-            batch_size, self.prediction_length, self.target_dim, device=x_hist.device
-        )
-        x_hist_norm, _, loc, scale = self._normalize_target(x_hist, dummy_future)
+        # Fit Student-t marginals on history then transform to Gaussian space.
+        df, loc, scale = self._fit_student_t(x_hist)
+        x_hist_norm = self._to_gaussian(x_hist, df, loc, scale)
         cond_dynamic_norm, cond_static_norm = self._normalize_cond(cond_dynamic, cond_static)
 
         cond_dynamic_aug, cond_static_aug = self._prepare_conditioning(
@@ -254,18 +288,23 @@ class ConditionalTimeGradTrainingNetwork(nn.Module):
         cond_static_rep = cond_static_aug.repeat(num_samples, 1)
 
         cond = {"dynamic": cond_dynamic_rep, "static": cond_static_rep}
-        samples = self.model.diffusion.sample(
+        z_samples = self.model.diffusion.sample(
             batch_size=batch_size * num_samples,
             horizon=self.prediction_length,
             cond=cond,
             clip_denoised=clip_denoised,
         )
 
-        samples = samples.view(num_samples, batch_size, self.target_dim, self.prediction_length)
-        samples = samples.permute(0, 1, 3, 2)  # -> [S, B, horizon, target_dim]
+        z_samples = z_samples.view(
+            num_samples, batch_size, self.target_dim, self.prediction_length
+        )
+        z_samples = z_samples.permute(0, 1, 3, 2)  # -> [S, B, horizon, target_dim]
 
-        # Rescale back to original space.
-        samples = samples * scale + loc
+        # Invert marginal transform back to real returns.
+        loc_rep = loc.unsqueeze(0).expand(num_samples, -1, -1, -1)
+        scale_rep = scale.unsqueeze(0).expand_as(loc_rep)
+        df_rep = df.unsqueeze(0).expand_as(loc_rep)
+        samples = self._from_gaussian(z_samples, df_rep, loc_rep, scale_rep)
         return samples
 
 
