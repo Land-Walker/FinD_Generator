@@ -8,6 +8,7 @@ PyWavelets
 statsmodels
 scikit-learn
 torch
+scipy
 joblib
 fastparquet
 pyarrow

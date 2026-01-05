@@ -15,13 +15,90 @@ from __future__ import annotations
 
 from typing import Tuple
 
+import scipy.stats as stats
+
 import torch
 import torch.nn as nn
+from torch.distributions import Normal
 
 from src.models.conditional_timegrad import ConditionalTimeGrad
+from src.models.timegrad_core.timegrad_base import TimeGradBase
 
 
-class ConditionalTimeGradPredictionNetwork(nn.Module):
+class StudentTMarginalMixin:
+    """Shared Student-t marginal helpers for both conditional and vanilla paths."""
+
+    scale_eps: float
+    fixed_df: float
+    ewma_alpha: float
+    target_dim: int
+
+    def _fit_student_t(self, x_hist: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        loc = x_hist.mean(dim=1, keepdim=True)
+        centered = x_hist - loc
+
+        df = torch.full(
+            (x_hist.size(0), 1, self.target_dim),
+            float(self.fixed_df),
+            device=x_hist.device,
+            dtype=x_hist.dtype,
+        )
+
+        alpha = self.ewma_alpha
+        var = centered[:, 0:1, :].pow(2)
+        vars_t = [var]
+        for t in range(1, centered.size(1)):
+            var = alpha * var + (1.0 - alpha) * centered[:, t : t + 1, :].pow(2)
+            vars_t.append(var)
+
+        ewma_var = torch.cat(vars_t, dim=1)
+        scale_hist = torch.sqrt(ewma_var * (self.fixed_df - 2.0) / self.fixed_df).clamp_min(
+            self.scale_eps
+        )
+
+        scale_future = scale_hist[:, -1:, :]
+        return df, loc, scale_hist, scale_future
+
+    def _student_t_cdf(
+        self, x: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        with torch.no_grad():
+            u_np = stats.t.cdf(
+                x.detach().cpu().numpy(),
+                df=df.detach().cpu().numpy(),
+                loc=loc.detach().cpu().numpy(),
+                scale=scale.detach().cpu().numpy(),
+            )
+        u = torch.from_numpy(u_np).to(device=x.device, dtype=x.dtype)
+        return u.clamp(min=1e-6, max=1 - 1e-6)
+
+    def _student_t_ppf(
+        self, u: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        with torch.no_grad():
+            x_np = stats.t.ppf(
+                u.detach().cpu().numpy(),
+                df=df.detach().cpu().numpy(),
+                loc=loc.detach().cpu().numpy(),
+                scale=scale.detach().cpu().numpy(),
+            )
+        return torch.from_numpy(x_np).to(device=u.device, dtype=u.dtype)
+
+    def _to_gaussian(
+        self, x: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        u = self._student_t_cdf(x, df, loc, scale)
+        z = Normal(0.0, 1.0).icdf(u)
+        return z
+
+    def _from_gaussian(
+        self, z: torch.Tensor, df: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor
+    ) -> torch.Tensor:
+        u = Normal(0.0, 1.0).cdf(z).clamp(min=1e-6, max=1 - 1e-6)
+        x = self._student_t_ppf(u, df, loc, scale)
+        return x
+
+class ConditionalTimeGradPredictionNetwork(StudentTMarginalMixin, nn.Module):
     """Autoregressive inference wrapper for the conditional TimeGrad model."""
 
     def __init__(
@@ -43,6 +120,8 @@ class ConditionalTimeGradPredictionNetwork(nn.Module):
         cond_strategy: str = "fast",
         rnn_type: str = "lstm",
         scale_eps: float = 1e-5,
+        fixed_df: float = 4.0,
+        ewma_alpha: float = 0.94,
     ) -> None:
         super().__init__()
 
@@ -50,6 +129,8 @@ class ConditionalTimeGradPredictionNetwork(nn.Module):
         self.prediction_length = prediction_length
         self.target_dim = target_dim
         self.scale_eps = scale_eps
+        self.fixed_df = fixed_df
+        self.ewma_alpha = ewma_alpha
 
         self.input_cond_dynamic_dim = cond_dynamic_dim
         self.input_cond_static_dim = cond_static_dim
@@ -96,16 +177,6 @@ class ConditionalTimeGradPredictionNetwork(nn.Module):
             cond_strategy=cond_strategy,
             rnn_type=rnn_type,
         )
-
-    def _normalize_history(
-        self, x_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Normalize the history window and return loc/scale for later reuse."""
-
-        loc = x_hist.mean(dim=1, keepdim=True)
-        scale = x_hist.std(dim=1, keepdim=True).clamp_min(self.scale_eps)
-        x_hist_norm = (x_hist - loc) / scale
-        return x_hist_norm, loc, scale
 
     def _normalize_cond(
         self, cond_dynamic: torch.Tensor, cond_static: torch.Tensor
@@ -197,14 +268,20 @@ class ConditionalTimeGradPredictionNetwork(nn.Module):
                 f"Expected cond_static dim {self.input_cond_static_dim}, got {cond_static.shape[-1]}"
             )
 
-        x_hist_norm, loc, scale = self._normalize_history(x_hist)
-        cond_dynamic_norm, cond_static_norm = self._normalize_cond(
-            cond_dynamic, cond_static
-        )
+       # Backward compatibility for checkpoints saved prior to marginal attrs.
+        if not hasattr(self, "fixed_df"):
+            self.fixed_df = 4.0
+        if not hasattr(self, "ewma_alpha"):
+            self.ewma_alpha = 0.94
 
-        # Freeze loc/scale across samples and horizon.
+        df, loc, scale_hist, scale_future = self._fit_student_t(x_hist)
+        x_hist_norm = self._to_gaussian(x_hist, df, loc, scale_hist)
+        cond_dynamic_norm, cond_static_norm = self._normalize_cond(cond_dynamic, cond_static)
+
+        # Freeze marginal params across samples and horizon.
         loc_rep = loc.repeat(num_samples, 1, 1)
-        scale_rep = scale.repeat(num_samples, 1, 1)
+        df_rep = df.repeat(num_samples, 1, 1)
+        scale_rep = scale_future.repeat(num_samples, 1, 1)
 
         # Expand batch for multiple samples.
         hist_window = x_hist_norm.repeat(num_samples, 1, 1)
@@ -253,11 +330,80 @@ class ConditionalTimeGradPredictionNetwork(nn.Module):
             cond_dynamic_window = torch.cat([cond_dynamic_window[:, 1:, :], zero_dyn], dim=1)
 
         forecasts_norm = torch.cat(forecasts_norm, dim=1)  # [SB, horizon, C]
-        forecasts = forecasts_norm * scale_rep + loc_rep
-        forecasts = forecasts.view(
-            num_samples, batch_size, self.prediction_length, self.target_dim
-        )
+        forecasts = self._from_gaussian(forecasts_norm, df_rep, loc_rep, scale_rep)
+        forecasts = forecasts.view(num_samples, batch_size, self.prediction_length, self.target_dim)
         return forecasts
 
 
-__all__ = ["ConditionalTimeGradPredictionNetwork"]
+class VanillaTimeGradPredictionNetwork(StudentTMarginalMixin, nn.Module):
+    """Inference wrapper for vanilla TimeGrad with Student-t marginals."""
+
+    def __init__(
+        self,
+        target_dim: int,
+        context_length: int,
+        prediction_length: int,
+        *,
+        diff_steps: int = 100,
+        beta_end: float = 0.1,
+        beta_schedule: str = "linear",
+        residual_layers: int = 6,
+        residual_channels: int = 32,
+        scale_eps: float = 1e-5,
+        fixed_df: float = 4.0,
+        ewma_alpha: float = 0.94,
+    ) -> None:
+        super().__init__()
+
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+        self.target_dim = target_dim
+        self.scale_eps = scale_eps
+        self.fixed_df = fixed_df
+        self.ewma_alpha = ewma_alpha
+
+        self.model = TimeGradBase(
+            target_dim=target_dim,
+            prediction_length=prediction_length,
+            diff_steps=diff_steps,
+            beta_end=beta_end,
+            beta_schedule=beta_schedule,
+            residual_layers=residual_layers,
+            residual_channels=residual_channels,
+        )
+
+    @torch.no_grad()
+    def sample_forecast(
+        self, x_hist: torch.Tensor, *, num_samples: int = 1, clip_denoised: bool = True
+    ) -> torch.Tensor:
+        if x_hist.shape[1] != self.context_length:
+            raise ValueError(
+                f"Expected x_hist length {self.context_length}, got {x_hist.shape[1]}"
+            )
+
+        batch_size = x_hist.size(0)
+
+        df, loc, _, scale_future = self._fit_student_t(x_hist)
+        loc_rep = loc.expand(num_samples, -1, -1, -1)
+        df_rep = df.expand_as(loc_rep)
+        scale_rep = scale_future.expand_as(loc_rep)
+
+        z_samples = []
+        for _ in range(num_samples):
+            z = self.model.diffusion.sample(
+                batch_size=batch_size,
+                horizon=self.prediction_length,
+                cond=None,
+                clip_denoised=clip_denoised,
+            )
+            z_samples.append(z.transpose(1, 2))
+
+        z_stack = torch.stack(z_samples, dim=0)
+        samples = self._from_gaussian(z_stack, df_rep, loc_rep, scale_rep)
+        return samples
+
+
+__all__ = [
+    "ConditionalTimeGradPredictionNetwork",
+    "VanillaTimeGradPredictionNetwork",
+]
