@@ -44,3 +44,13 @@ DEFAULT_HORIZON = 5
 DEFAULT_BATCH = 32
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
+
+# Training Hyperparameter
+CONTEXT_LENGTH = 64
+prediction_length = 24
+batch_size = 4
+num_epochs = 100 # best epochs of the original based on a paper
+max_train_steps = 4
+max_val_steps = 2
+num_samples = 200  # scenario samples
+lr = 1e-4
