@@ -4,7 +4,7 @@ A conditional TimeGrad implementation for financial time series forecasting.
 
 **Objective:** To serve as a high-fidelity, probabilistic infrastructure for generating **counterfactual financial time series scenarios** (e.g., asset returns, volatility) that are conditioned on past market history and exogenous, scenario-defined macro regimes.
 
-This project is a sophisticated implementation of a conditional diffusion model, adapting the **TimeGrad** architecture to meet the strict requirements of quantitative finance. For more details, check out architecture.md.
+This project is a sophisticated implementation of a conditional diffusion model, adapting the **TimeGrad** architecture to meet the strict requirements of quantitative finance. For more details, check out [architecture.md](/docs/architecture.md).
 
 ---
 
