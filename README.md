@@ -1,16 +1,39 @@
-# FinD_Generator: Conditional Diffusion Model for Financial Scenario Generation
+# FinD Generator
+
+A conditional TimeGrad implementation for financial time series forecasting.
 
 **Objective:** To serve as a high-fidelity, probabilistic infrastructure for generating **counterfactual financial time series scenarios** (e.g., asset returns, volatility) that are conditioned on past market history and exogenous, scenario-defined macro regimes.
 
-This project is a sophisticated implementation of a conditional diffusion model, adapting the **TimeGrad** architecture to meet the strict requirements of quantitative finance.
+This project is a sophisticated implementation of a conditional diffusion model, adapting the **TimeGrad** architecture to meet the strict requirements of quantitative finance. For more details, check out architecture.md.
 
 ---
 
-### **Crucial Project Scope (What it IS and IS NOT)**
+## Usage
 
-| **FinD_Generator IS...** | **FinD_Generator IS NOT...** | **Why This Matters to Quants/Researchers** |
-| :--- | :--- | :--- |
-| **A Probabilistic Scenario Generator** | A deterministic time-series predictor (like LSTM or Transformer). | Proves understanding that financial modeling requires capturing **uncertainty (risk)**, not just point estimates. |
-| **An Infrastructure Tool** | A direct trading or execution bot. | Separates core modeling ability from speculative trading logic, positioning the project as a **research/risk management asset**. |
-| **Regime-Aware & Stress-Test Ready** | A passively trained model. | Highlights the unique **scenario planning** capability unlocked by static conditioning (see `scenario_generator.py`). |
-| **Leakage-Safe** | Using look-ahead bias during preprocessing/feature extraction. | Demonstrates strong **engineering and research discipline**, essential for backtesting credibility. |
+The project includes a convenience script `run.py` to handle data collection, training, and inference in a single pipeline.
+
+### 1. First Run (Download Data & Train)
+
+To download fresh data, train the model, and generate forecasts:
+
+```bash
+python run.py --download --epochs 10 --batch-size 64
+```
+
+### 2. Subsequent Runs (Use Local Data)
+
+Once data is downloaded to `data/raw`, you can run training without the `--download` flag to use the cached parquet files:
+
+```bash
+python run.py --epochs 10
+```
+
+### 3. Key Arguments
+
+- `--download`: Fetch fresh data from Yahoo Finance and FRED.
+- `--epochs`: Number of training epochs (default: 1).
+- `--batch-size`: Batch size (default: 64).
+- `--num-samples`: Number of forecast samples to generate per series (default: 2).
+- `--device`: `cpu` or `cuda` (automatically detected if omitted).
+
+Forecasts are saved to `data/processed/forecasts.pt`.
