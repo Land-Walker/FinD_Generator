@@ -234,6 +234,12 @@ def label_market_regimes(df: pd.DataFrame,
     # vol regime
     if vol_col in df.columns:
         df['vol_regime'] = np.where(df[vol_col] > v_thresh, 'high_vol', 'normal_vol')
+
+    # Enforce consistent categories to ensure fixed input dimensions for the model
+    df['market_regime'] = pd.Categorical(df['market_regime'], categories=['bear', 'bull', 'sideways'], ordered=False)
+    if 'vol_regime' in df.columns:
+        df['vol_regime'] = pd.Categorical(df['vol_regime'], categories=['high_vol', 'normal_vol'], ordered=False)
+
     # one-hot encode (safely)
     to_encode = [c for c in ['market_regime','vol_regime'] if c in df.columns]
     if to_encode:
@@ -269,6 +275,10 @@ def label_macro_regimes(df: pd.DataFrame,
         df.loc[cond_highinf, 'macro_regime'] = 'high_inflation'
         df.loc[cond_recess, 'macro_regime'] = 'recession'
         df.loc[cond_expand, 'macro_regime'] = 'expansion'
+
+    # Enforce consistent categories to ensure fixed input dimensions for the model
+    df['macro_regime'] = pd.Categorical(df['macro_regime'], categories=['expansion', 'high_inflation', 'normal', 'recession', 'stagflation'], ordered=False)
+
     # one-hot encode
     df = pd.get_dummies(df, columns=['macro_regime'], prefix_sep='_')
     return df
