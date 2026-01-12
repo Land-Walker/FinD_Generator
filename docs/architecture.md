@@ -58,19 +58,66 @@ The raw data is processed into three categories of features:
 The core model is a **Conditional TimeGrad** network. It combines a Recurrent Neural Network (RNN) with a Denoising Diffusion Probabilistic Model (DDPM).
 
 ### A. The Backbone (RNN)
-An LSTM or GRU processes the historical window $x_{hist}$ and dynamic conditioning $c_{dyn}$ to produce a hidden state $h_t$. This hidden state summarizes the temporal dependencies.
+An LSTM or GRU processes the historical window $x_{hist}$ and dynamic conditioning $c_{dyn}$ to produce a hidden state $h_t$. This hidden state summarizes the temporal dependencies:
+
+$$
+h_t = \text{RNN}(x_t, c_{dyn, t}, h_{t-1})
+$$
+
+This embedding $h_t$ serves as the primary conditioning input for the diffusion model at time step $t$.
 
 ### B. The Diffusion Process
-The model learns to approximate the data distribution $q(x_{future} | x_{hist})$ by reversing a Gaussian diffusion process.
+The model learns to approximate the conditional data distribution $q(x_{future} | x_{hist})$ by reversing a Gaussian diffusion process. We denote diffusion steps by $k \in \{1, \dots, K\}$.
 
-1.  **Forward Process ($q$)**: Gradually adds Gaussian noise to $x_{future}$ over $K$ steps until it becomes pure noise $\mathcal{N}(0, I)$.
-2.  **Reverse Process ($p_\theta$)**: A neural network $\epsilon_\theta(x_t, t, h, c_{stat})$ predicts the noise added at step $t$, allowing the model to denoise samples iteratively.
+#### 1. Forward Process (Noise Injection)
+We define a fixed Markov chain that gradually adds Gaussian noise to the data $x_0$ (representing the target slice $x_{future}$) over $K$ steps according to a variance schedule $\beta_1, \dots, \beta_K$:
+
+$$
+q(x_k | x_{k-1}) = \mathcal{N}(x_k; \sqrt{1 - \beta_k} x_{k-1}, \beta_k I)
+$$
+
+Using the property of Gaussians, we can sample $x_k$ at any arbitrary step $k$ directly from $x_0$:
+
+$$
+q(x_k | x_0) = \mathcal{N}(x_k; \sqrt{\bar{\alpha}_k} x_0, (1 - \bar{\alpha}_k) I)
+$$
+
+where $\alpha_k = 1 - \beta_k$ and $\bar{\alpha}_k = \prod_{s=1}^k \alpha_s$.
+
+#### 2. Reverse Process (Denoising)
+The generative process is defined as the reverse Markov chain, where a neural network approximates the true posterior $q(x_{k-1} | x_k)$. We model this as a Gaussian transition conditioned on the history embedding $h$ and static regimes $c_{stat}$:
+
+$$
+p_\theta(x_{k-1} | x_k, h, c_{stat}) = \mathcal{N}(x_{k-1}; \mu_\theta(x_k, k, h, c_{stat}), \tilde{\beta}_k I)
+$$
+
+The mean $\mu_\theta$ is parameterized by the noise prediction network $\epsilon_\theta$:
+
+$$
+\mu_\theta(x_k, k, h, c_{stat}) = \frac{1}{\sqrt{\alpha_k}} \left( x_k - \frac{\beta_k}{\sqrt{1 - \bar{\alpha}_k}} \epsilon_\theta(x_k, k, h, c_{stat}) \right)
+$$
+
+#### 3. Training Objective
+The model is trained to minimize the simplified variational lower bound, which corresponds to the Mean Squared Error (MSE) between the actual noise $\epsilon$ and the predicted noise:
+
+$$
+\mathcal{L}(\theta) = \mathbb{E}_{x_0, \epsilon \sim \mathcal{N}(0, I), k} \left[ \| \epsilon - \epsilon_\theta(\underbrace{\sqrt{\bar{\alpha}_k} x_0 + \sqrt{1 - \bar{\alpha}_k} \epsilon}_{x_k}, k, h, c_{stat}) \|^2 \right]
+$$
 
 ---
 
 ## 4. Inference & Autoregression (`src/predictor`)
 
 Inference is handled by `ConditionalTimeGradPredictionNetwork`. Unlike standard diffusion generation, time-series forecasting requires **autoregression**.
+
+### Probabilistic Factorization
+The goal is to model the joint distribution of the future time series $x_{T+1:T+L}$ given history $x_{1:T}$. The model factorizes this joint distribution autoregressively:
+
+$$
+p_\theta(x_{T+1:T+L} | x_{1:T}) = \prod_{t=T+1}^{T+L} p_\theta(x_t | x_{1:t-1}, c_{dyn, t}, c_{stat})
+$$
+
+At each step $t$, the conditional distribution $p_\theta(x_t | \dots)$ is realized by sampling from the diffusion model described above.
 
 ### The Sliding Window Loop
 To generate a forecast of length $L$:
