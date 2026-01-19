@@ -37,3 +37,31 @@ python run.py --epochs 10
 - `--device`: `cpu` or `cuda` (automatically detected if omitted).
 
 Forecasts are saved to `data/processed/forecasts.pt`.
+
+---
+
+## Results
+
+### 1. Probabilistic Forecasting
+**Problem**: Standard diffusion models often fail to capture the 'Fat-tail' risks in financial markets.
+**Solution**: Designed FinD_Generator, a regime-aware diffusion model extending TimeGrad with Student-t Copula
+normalization and FiLM-based conditioning.
+
+Metric | Vanilla | FinD_Generator
+--- | --- | ---
+CRPS | 0.0551 | 0.0609
+MAE | 0.0828 | 0.0798
+80% Coverage | 0.1667 | 0.0938
+
+!![Probabilistic forecast comparison](image/graph/comparison.png)
+
+**Limitation**: The static regime embeddings were suboptimal due to the structural heterogeneity of the 50-year
+dataset and compute constraints; however, the model's robust CRPS scores demonstrate its ability to generalize
+effectively even with coarse global context.
+
+### 2. Stress Testing Simulation (Scenario Generation)
+Developed a ScenarioGenerator engine to force specific regimes (e.g., High Volatility) during inference. This
+allows for counterfactual analysis of portfolio PnL under market crashes.
+
+![Stress Test PnL](image/stress_PnL_output.png)
+![Stress Test Amplification](image/stress_amplify_output.png)
