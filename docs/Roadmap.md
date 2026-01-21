@@ -9,6 +9,7 @@
 - **Transformer Backbone**: Experiment with replacing the LSTM history encoder with a **Temporal Fusion Transformer (TFT)** or standard Transformer encoder to better capture long-range regime dependencies.
 - **Classifier-Free Guidance**: Implement guidance terms to allow "knob-turning" of specific macro variables (e.g., "Generate a trajectory where Inflation > 5%") without retraining the model.
 - **Alternative Noise Schedulers**: Benchmark Cosine vs. Linear noise schedules to improve sample quality in low-volatility regimes.
+- **Copula layer**: Replace the current Gaussian-copula-style latent dependence with an explicit Student-t copula, enabling stronger cross-asset tail dependence while preserving Student-t marginals.
 
 ## 3. Evaluation & Downstream Validation
 - **Downstream RL Testing**: Connect FinD_Generator to an RL Execution Agent to validate if training on synthetic "Counterfactual" data improves the agent's Sharpe Ratio on out-of-sample data.
