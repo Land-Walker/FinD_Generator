@@ -1,6 +1,6 @@
 # PROGRESS
 
-> Unpushed commits: (none recorded yet — push status updated after each commit per W1.2)
+> Unpushed commits (W1.2): `68f79cc` (W0 bootstrap) — push failed: no GitHub credentials available in this environment. Owner must push manually or provide credentials.
 
 ## 2026-06-11 — W0 Environment bootstrap (Cowork master directive v3)
 
@@ -42,4 +42,4 @@
 4. After approval: Phase 2 (regime_validation headline, effect sizes), Phase 3 (all four baselines, canonical table), Phase 4 rescoped (4.3 calibration MANDATORY, 4.4 CFG MANDATORY, 4.1 DDIM optional, 4.2/4.5 CUT), Phase 5 stress-testing showcase (`src/stress_demo/`, README rewrite marked DRAFT), FINAL_REPORT.md + 10-line owner action list.
 
 ### Positioning (governs all reports)
-FinD_Generator is a regime-conditional stress scenario generator. Headline result = controllable regime conditioning (`regime_validation`), not beating classical baselines on unconditional stylized facts. Baseline wins on unconditional metrics are expected, reportable findings for the limitations section.
+FinD_Generator is a regime-conditional stress scenario generator. Headline result = controllable regime conditioning (`regime_validation`), not beating classical baselines on unconditional stylized facts. Baseline wins on uncon
