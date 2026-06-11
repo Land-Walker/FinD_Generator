@@ -1,6 +1,6 @@
 # PROGRESS
 
-> Unpushed commits (W1.2): `68f79cc` (W0 bootstrap) — push failed: no GitHub credentials available in this environment. Owner must push manually or provide credentials.
+> Unpushed commits (W1.2): **every commit on `main` after `820d66a`** is local-only (no GitHub credentials in the sandbox; owner pushes manually at review gates — owner-confirmed policy). Run `git log --oneline 820d66a..main` for the exact list. As of the last update: `68f79cc`, `a76f0bf`, `8e03abb`, `59d0551`, plus any later Phase 0+ commits.
 
 ## 2026-06-11 — W0 Environment bootstrap (Cowork master directive v3)
 
@@ -39,5 +39,4 @@ A previous sandbox session implemented Phase 0 (per its own PROGRESS.md: `src/ut
 - The master directive layers on top of an "original Phase 0→4 specification (Sections A–G)" (Section C 0.1–0.6 / 1.1–1.5 step definitions, self-checks D1–D6, commit style E2, BLOCKED rules A2, anti-cheat F). That document is **not in the repo and was not provided in this session**; only a high-level outline of it survives in the codex branch PROGRESS.md. Owner has been asked to either supply the original spec or authorize execution from the directive + outline alone. This is recorded here rather than in BLOCKED.md because work can proceed the moment the owner answers.
 
 ### Execution plan
-1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence (W2.4), pyflakes in self-check (W2.3), known bug fixes per W2.5.
-2. **Phase 1 — Causal Data Hygiene**: remove look-ahead leakage (wavelet, missing-value handling: zero backwar
+1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence 
