@@ -4,6 +4,9 @@
 
 ## 2026-06-11 — W0 Environment bootstrap (Cowork master directive v3)
 
+### Prior attempt (historical record)
+A previous sandbox session implemented Phase 0 (per its own PROGRESS.md: `src/utils/seed.py`, `src/utils/run_folder.py`, `configs/default.yaml`, `src/utils/config_io.py`, `tests/test_reproducibility.py`, modified `run.py`, pinned requirements) but that work was **never pushed and is lost** — it exists on no branch of this remote. Its claimed results (pytest pass, smoke pass, determinism diff 0.0) are unauditable and are **NOT carried forward**. Two of its design choices are explicitly overridden by the master directive: the omegaconf fallback (`config_io.py`) violates W2.1 (omegaconf is a hard dependency, fail loudly), and its `ffill()/bfill()` replacement reintroduced backward-fill, which W2.2 forbids. Phase 0 here starts from scratch. The remote branches `origin/codex/initialize-progress.md-and-outline-plan` and `origin/Clean-Refactor-1` are left untouched as historical record; all work happens on `main`.
+
 ### W0.1 / W0.2 Repo state
 - Working folder contains the FinD_Generator repo: `run.py`, `src/`, `docs/Roadmap.md`, `docs/architecture.md` all present.
 - `src/utils/seed.py` and `configs/default.yaml` do NOT exist → this is the **pre-Phase-0 original**. Proceeding with Phase 0 per W0.2.
@@ -37,9 +40,4 @@
 
 ### Execution plan
 1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence (W2.4), pyflakes in self-check (W2.3), known bug fixes per W2.5.
-2. **Phase 1 — Causal Data Hygiene**: remove look-ahead leakage (wavelet, missing-value handling: zero backward-fill per W2.2, `.ffill()` only per W2.7), train-only fit of the roll_vol median regime threshold (W2.6), `test_no_leakage.py` covering EVERY engineered feature with the list enumerated in `docs/data_integrity.md`, honest before/after 80%-coverage numbers.
-3. **★ MANDATORY STOP (W3.3)** — handoff in PROGRESS.md; wait for explicit owner approval.
-4. After approval: Phase 2 (regime_validation headline, effect sizes), Phase 3 (all four baselines, canonical table), Phase 4 rescoped (4.3 calibration MANDATORY, 4.4 CFG MANDATORY, 4.1 DDIM optional, 4.2/4.5 CUT), Phase 5 stress-testing showcase (`src/stress_demo/`, README rewrite marked DRAFT), FINAL_REPORT.md + 10-line owner action list.
-
-### Positioning (governs all reports)
-FinD_Generator is a regime-conditional stress scenario generator. Headline result = controllable regime conditioning (`regime_validation`), not beating classical baselines on unconditional stylized facts. Baseline wins on uncon
+2. **Phase 1 — Causal Data Hygiene**: remove look-ahead leakage (wavelet, missing-value handling: zero backwar
