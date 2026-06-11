@@ -1,0 +1,40 @@
+{
+  "label": "before_fix",
+  "protocol": {
+    "n_windows": 64,
+    "n_samples": 16,
+    "context": 64,
+    "horizon": 24,
+    "seed_base": 0,
+    "interval": "central 80% (q10..q90, empirical)",
+    "checkpoint": "checkpoints/conditional_timegrad_best.pt",
+    "data": "data/processed/test_processed.csv (legacy frame)"
+  },
+  "coverage_80": 0.1165364608168602,
+  "coverage_80_by_horizon_step": [
+    0.078125,
+    0.171875,
+    0.171875,
+    0.203125,
+    0.171875,
+    0.140625,
+    0.125,
+    0.125,
+    0.109375,
+    0.109375,
+    0.03125,
+    0.09375,
+    0.109375,
+    0.09375,
+    0.078125,
+    0.109375,
+    0.09375,
+    0.0625,
+    0.078125,
+    0.09375,
+    0.140625,
+    0.140625,
+    0.15625,
+    0.109375
+  ]
+}
