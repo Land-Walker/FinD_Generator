@@ -1,14 +1,23 @@
-pandas
-pandas-datareader
-seaborn
-numpy
-yfinance
-matplotlib
-PyWavelets
-statsmodels
-scikit-learn
-torch
-scipy
-joblib
-fastparquet
-pyarrow
+# Pinned per MASTER_SPEC Phase 0.5 (versions = the environment Phase 0 was
+# verified in). omegaconf is a HARD dependency (W2.1): no fallback path.
+pandas==2.3.3
+pandas-datareader==0.10.0
+seaborn==0.13.2
+numpy==2.2.6
+yfinance==1.4.1
+matplotlib==3.10.9
+PyWavelets==1.8.0
+statsmodels==0.14.6
+scikit-learn==1.7.2
+torch==2.12.0
+scipy==1.15.3
+joblib==1.5.3
+fastparquet==2026.5.0
+pyarrow==24.0.0
+omegaconf==2.3.0
+properscoring==0.1
+arch==8.0.0
+tqdm==4.68.2
+# dev / self-check tooling (Section D)
+pytest==9.0.3
+pyflakes==3.4.0

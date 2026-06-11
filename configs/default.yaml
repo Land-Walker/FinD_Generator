@@ -1,0 +1,29 @@
+# Default run configuration (MASTER_SPEC Phase 0.3).
+# Mirrors every CLI flag of run.py; values here are identical to the argparse
+# defaults that existed before Phase 0 (E3: no silent default changes).
+# CLI flags, when given explicitly, override these values.
+
+device: null            # null -> cuda if available, else cpu
+epochs: 1
+batch_size: 64          # prior default: config.DEFAULT_BATCH = 64
+context_length: 64      # prior default: config.DEFAULT_SEQ_LEN = 64
+prediction_length: 5    # prior default: config.DEFAULT_HORIZON = 5
+lr: 1.0e-3
+diff_steps: 100
+beta_end: 0.1
+beta_schedule: linear
+residual_layers: 6
+residual_channels: 32
+cond_embed_dim: 64
+cond_attn_heads: 4
+cond_attn_dropout: 0.1
+num_samples: 2          # forecast samples per series (prior default: 2)
+max_train_steps: 0      # 0 = no cap
+max_val_steps: 0        # 0 = no cap
+download: false         # download fresh data instead of local parquet
+
+# Run identity. seed has NO default on purpose (Phase 0.4: --seed is
+# required; silent default seeding is forbidden). run_name may be set here
+# or via --run-name.
+run_name: run
+seed: null
