@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 
 import pywt
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -43,18 +41,55 @@ def log_growth(series: pd.Series) -> pd.Series:
 def seasonal_difference(series: pd.Series, period: int = 12) -> pd.Series:
     return series - series.shift(period)
 
-def wavelet_denoise_series(series: pd.Series, wavelet: str = config.WAVELET, level: int = config.WAVELET_LEVEL) -> pd.Series:
-    """Denoise by applying wavelet thresholding and reconstructing the signal."""
-    x = series.fillna(method="ffill").fillna(method="bfill").values
+def _denoise_window(x: np.ndarray, wavelet: str, level: int) -> float:
+    """Wavelet-threshold-denoise one backward-looking window; return its last point.
+
+    This is the single-point kernel of the causal denoiser. ``x`` must contain
+    only data up to and including the timestep being denoised; tests/test_no_leakage.py
+    calls it directly on truncated data to audit causality.
+    """
     coeffs = pywt.wavedec(x, wavelet=wavelet, level=level)
-    # estimate noise sigma from last detail coeff
+    # estimate noise sigma from last detail coeff (within-window: causal)
     sigma = np.median(np.abs(coeffs[-1])) / 0.6745 if len(coeffs[-1]) > 0 else 0.0
     uthresh = sigma * np.sqrt(2 * np.log(len(x))) if sigma > 0 else 0.0
     denoised = coeffs[:]
     denoised[1:] = [pywt.threshold(c, value=uthresh, mode="soft") for c in denoised[1:]]
     rec = pywt.waverec(denoised, wavelet=wavelet)
-    rec = rec[: len(x)]
-    return pd.Series(rec, index=series.index)
+    return float(rec[len(x) - 1])
+
+
+def wavelet_denoise_series(
+    series: pd.Series,
+    wavelet: str = config.WAVELET,
+    level: int = config.WAVELET_LEVEL,
+    window: int = config.WAVELET_WINDOW,
+) -> pd.Series:
+    """Causal (rolling-window) wavelet denoising — MASTER_SPEC Phase 1.1(a).
+
+    For each timestep ``t`` the wavelet transform sees ONLY the backward
+    window ``[t-window+1, t]`` and the reconstructed value at ``t`` is kept.
+    The legacy implementation ran ``wavedec`` over the full series, so every
+    output point depended on future data (look-ahead). The first
+    ``window - 1`` outputs (and any positions still NaN after forward-fill)
+    are NaN; the merge step drops those leading rows (Phase 1.2 choice (i)).
+
+    No backward-fill anywhere (W2.2).
+    """
+    min_window = 2 ** level * 4
+    if window < min_window:
+        raise ValueError(
+            f"wavelet window {window} too small for level {level}; need >= {min_window}"
+        )
+
+    x = series.ffill().to_numpy(copy=True, dtype=float)  # copy=True: W2.5 read-only fix
+    n = len(x)
+    out = np.full(n, np.nan)
+    for t in range(window - 1, n):
+        w = x[t - window + 1 : t + 1]
+        if np.isnan(w).any():  # leading NaNs that ffill could not resolve
+            continue
+        out[t] = _denoise_window(w, wavelet=wavelet, level=level)
+    return pd.Series(out, index=series.index)
 
 def _ensure_2d(arr: np.ndarray) -> np.ndarray:
     """Return arr as 2D array with shape (n_rows, n_cols). If 1D, reshape to (n_rows,1)."""
@@ -62,6 +97,24 @@ def _ensure_2d(arr: np.ndarray) -> np.ndarray:
     if arr.ndim == 1:
         return arr.reshape(-1, 1)
     return arr
+
+
+def _ffill_checked(df: pd.DataFrame) -> pd.DataFrame:
+    """Forward-fill only (W2.2) and fail loudly if any NaN survives.
+
+    The legacy pipeline chained ``fillna(method='ffill').fillna(0)`` here; the
+    constant-fill could silently fabricate zeros for unfilled leading rows.
+    After the Phase 1.2 leading-row drop there must be no NaNs at all, so any
+    survivor indicates a pipeline bug and raises instead of being masked.
+    """
+    out = df.ffill()
+    if out.isna().any().any():
+        bad = out.columns[out.isna().any()].tolist()
+        raise ValueError(
+            f"NaNs remain after forward-fill in columns {bad}; leading rows "
+            f"should have been dropped during the merge step"
+        )
+    return out
 
 
 def add_calendar_features(
@@ -149,10 +202,12 @@ def process_target_raw(target_df: pd.DataFrame, ohlc_cols: List[str] = ['open','
         if c not in df.columns:
             raise KeyError(f"{c} not in target_df")
         df[f"{c}_den"] = wavelet_denoise_series(df[c])
-    # keep volume separately (unaltered)
+    # keep volume separately (unaltered). Named target_volume_raw so it can
+    # never collide with the market block's volume column (see KNOWN_ISSUES:
+    # the legacy duplicate 'volume_raw' columns silently interleaved).
     if 'volume' in df.columns:
-        df['volume_raw'] = df['volume']
-    return df[[f"{c}_den" for c in ohlc_cols] + (['volume_raw'] if 'volume' in df.columns else [])]
+        df['target_volume_raw'] = df['volume']
+    return df[[f"{c}_den" for c in ohlc_cols] + (['target_volume_raw'] if 'volume' in df.columns else [])]
 
 
 def process_market_raw(market_df: pd.DataFrame, ohlc_cols: List[str] = ['open','high','low','close']) -> pd.DataFrame:
@@ -163,9 +218,9 @@ def process_market_raw(market_df: pd.DataFrame, ohlc_cols: List[str] = ['open','
             raise KeyError(f"{c} not in market_df")
         df[f"{c}_ret"] = log_return(df[c])
     if 'volume' in df.columns:
-        df['volume_raw'] = np.log1p(df['volume'])
+        df['market_volume_raw'] = np.log1p(df['volume'])
     # return only generated columns
-    cols = [f"{c}_ret" for c in ohlc_cols] + ((['volume_raw'] if 'volume' in df.columns else []))
+    cols = [f"{c}_ret" for c in ohlc_cols] + ((['market_volume_raw'] if 'volume' in df.columns else []))
     return df[cols]
 
 
@@ -215,21 +270,39 @@ def process_quarterly_macro_raw(quarterly_macro_df: pd.DataFrame) -> pd.DataFram
 # =========================================================
 # 2. Regime labellers (use after merging, but before scaling)
 # =========================================================
+def compute_market_roll_stats(df: pd.DataFrame,
+                              price_col: str = "market_close",
+                              window: int = 30) -> pd.DataFrame:
+    """Add backward-looking ``roll_return`` / ``roll_vol`` columns (causal)."""
+    df = df.copy()
+    if price_col not in df.columns:
+        raise KeyError(f"price_col {price_col} not found in df for roll stats")
+    df['roll_return'] = np.log(df[price_col]).diff(window)
+    df['roll_vol'] = df[price_col].pct_change().rolling(window, min_periods=1).std()
+    return df
+
+
 def label_market_regimes(df: pd.DataFrame,
+                         vol_median: float,
                          price_col: str = "market_close",
                          vol_col: str = "vix",
                          window: int = 30,
                          r_thresh: float = 0.02,
                          v_thresh: float = 20) -> pd.DataFrame:
-    """Add market + volatility regimes and one-hot encode them."""
+    """Add market + volatility regimes and one-hot encode them.
+
+    Phase 1.3: ``vol_median`` is REQUIRED and must be computed on the TRAIN
+    split only (frozen for val/test). The legacy implementation computed the
+    median over the full sample — look-ahead leakage. The fixed constants
+    (r_thresh=0.02, v_thresh=20) are not data-dependent (W2.6).
+    """
+    if vol_median is None or not np.isfinite(vol_median):
+        raise ValueError(f"vol_median must be a finite float fitted on TRAIN only, got {vol_median!r}")
     df = df.copy()
-    # rolling returns (backward-looking)
-    if price_col not in df.columns:
-        raise KeyError(f"price_col {price_col} not found in df for regime labelling")
-    df['roll_return'] = np.log(df[price_col]).diff(window)
-    df['roll_vol'] = df[price_col].pct_change().rolling(window, min_periods=1).std()
-    cond_bull = (df['roll_return'] > r_thresh) & (df['roll_vol'] < df['roll_vol'].median())
-    cond_bear = (df['roll_return'] < -r_thresh) & (df['roll_vol'] > df['roll_vol'].median())
+    if 'roll_return' not in df.columns or 'roll_vol' not in df.columns:
+        df = compute_market_roll_stats(df, price_col=price_col, window=window)
+    cond_bull = (df['roll_return'] > r_thresh) & (df['roll_vol'] < vol_median)
+    cond_bear = (df['roll_return'] < -r_thresh) & (df['roll_vol'] > vol_median)
     df['market_regime'] = np.select([cond_bull, cond_bear], ['bull','bear'], default='sideways')
     # vol regime
     if vol_col in df.columns:
@@ -323,9 +396,9 @@ def merge_all_blocks_unified(
 
     daily_index = pd.date_range(start=start_date, end=end_date, freq="B")
 
-    # --- Step 3: reindex daily and forward-fill ---
-    t = t.reindex(daily_index).ffill().bfill()
-    mkt = mkt.reindex(daily_index).ffill().bfill()
+    # --- Step 3: reindex daily and forward-fill (PAST-ONLY; no bfill, W2.2) ---
+    t = t.reindex(daily_index).ffill()
+    mkt = mkt.reindex(daily_index).ffill()
     daily_macro = daily_macro.reindex(daily_index).ffill()
 
     # --- Step 4: align monthly/quarterly data ---
@@ -338,11 +411,22 @@ def merge_all_blocks_unified(
     # --- Step 5: concatenate all blocks ---
     merged_df = pd.concat([daily_macro, monthly_aligned_daily, quarterly_aligned_daily, t, mkt], axis=1)
 
-    # --- Step 6: Final fill to handle cold-start NaNs ---
-    # bfill() handles NaNs at the beginning of the series where ffill has no past data.
-    merged_df = merged_df.bfill()
-    # drop columns that are all NaN
-    merged_df = merged_df.dropna(how="all")
+    # --- Step 6: drop cold-start rows instead of backward-filling (Phase 1.2,
+    # choice (i)). The legacy code used bfill() here, which copied FUTURE
+    # values into the leading rows — look-ahead leakage. We instead discard
+    # every row before the first date on which ALL columns have a (possibly
+    # forward-filled) value, and fail loudly if any NaN survives.
+    valid_mask = merged_df.notna().all(axis=1)
+    if not valid_mask.any():
+        raise ValueError("merge produced no fully-valid rows; check input coverage")
+    first_valid = valid_mask.idxmax()
+    merged_df = merged_df.loc[first_valid:]
+    if merged_df.isna().any().any():
+        bad = merged_df.columns[merged_df.isna().any()].tolist()
+        raise ValueError(
+            f"NaNs remain after leading-row drop (interior gaps ffill could not"
+            f" close) in columns: {bad}"
+        )
 
     return merged_df
 
@@ -460,6 +544,12 @@ class TimeGradDataModule:
     # Merge raw blocks, add regimes & calendar (no scaling/pca yet)
     # ---------------------------
     def preprocess_raw_merge(self) -> pd.DataFrame:
+        """Merge blocks + calendar features + roll stats. NO regime labels here.
+
+        Phase 1.3: regime labeling needs the train-only roll_vol median, so it
+        happens in ``_label_regimes`` AFTER the chronological split boundary is
+        known. This method must stay threshold-free by construction.
+        """
         blocks = self.build_raw_blocks()
         print("🔄 [preprocess_raw_merge] Merging all blocks into unified DataFrame...")
         merged = merge_all_blocks_unified(
@@ -472,40 +562,80 @@ class TimeGradDataModule:
         # add simple calendar features - Ensure the index is DatetimeIndex before calling
         if not isinstance(merged.index, pd.DatetimeIndex):
              raise ValueError("Merged DataFrame index must be a DatetimeIndex before adding calendar features")
-        print("🔄 Adding calendar and regime features...")
+        print("🔄 Adding calendar features and roll stats...")
         merged = add_calendar_features(merged)
-        # add basic market regime labels (needs 'market_close' column — pick 'close' from market if available)
-        # We'll create a 'market_close' column if not present: use target close as fallback.
-        if "close_ret" in merged.columns:
-            # Market ret columns are like 'open_ret','high_ret',...; we want a price-level close if available.
-            # Use the original market data (which has the 'close' column) and ensure it's indexed
-            original_market = self._ensure_index(self.data["market"])
-            merged['market_close'] = original_market['close'].reindex(merged.index).ffill().bfill()
-        else:
-            # fallback: ensure market_close exists by using the original market data
-            original_market = self._ensure_index(self.data["market"])
-            merged['market_close'] = original_market['close'].reindex(merged.index).ffill().bfill()
-
-        # vix column should be 'vix' (from daily_macro)
-        merged = label_market_regimes(merged, price_col='market_close', vol_col='vix_daily') # Updated to use vix_daily
-        # macro regime uses monthly/quarterly derived columns (inflation: 'cpi_mom', gdp: 'gdp_yoy')
-        merged = label_macro_regimes(merged, infl_col='cpi_mom', gdp_col='gdp_yoy')
-        print("✅ Calendar features and regime labels added.\n")
-        # drop intermediate helper cols to avoid leakage (roll_return, roll_vol kept? they are past-looking; we can drop)
-        for c in ['roll_return','roll_vol','infl_yoy','gdp_growth_yoy']:
-            if c in merged.columns:
-                merged = merged.drop(columns=[c])
-        self.merged_raw = merged
+        # price-level market close for roll stats / regime labelling
+        # (forward-fill only — W2.2; leading rows were already dropped in merge)
+        original_market = self._ensure_index(self.data["market"])
+        merged['market_close'] = original_market['close'].reindex(merged.index).ffill()
+        if merged['market_close'].isna().any():
+            raise ValueError("market_close has NaNs after ffill; check market data coverage")
+        merged = compute_market_roll_stats(merged, price_col='market_close')
+        print("✅ Calendar features and roll stats added.\n")
+        self.merged_unlabeled = merged
         return merged
+
+    def _label_regimes(self, train_end: int) -> pd.DataFrame:
+        """Label regimes with thresholds fitted on TRAIN ONLY (Phase 1.3)."""
+        if not hasattr(self, "merged_unlabeled"):
+            raise RuntimeError("call preprocess_raw_merge() before _label_regimes()")
+        merged = self.merged_unlabeled
+        if not (0 < train_end <= len(merged)):
+            raise ValueError(f"train_end {train_end} out of range for {len(merged)} rows")
+
+        # The ONLY data-dependent regime threshold (W2.6): roll_vol median,
+        # fitted on the TRAIN slice exclusively and frozen for val/test.
+        train_slice = merged.iloc[:train_end]
+        vol_median = float(train_slice['roll_vol'].median())
+        # Explicit guards (spec 1.3): the threshold must derive from the train
+        # slice alone, never from the full merged frame.
+        assert np.isfinite(vol_median), "train roll_vol median is not finite"
+        assert vol_median == float(merged.iloc[:train_end]['roll_vol'].median()), (
+            "vol_median must be computed from the train slice only"
+        )
+        full_median = float(merged['roll_vol'].median())
+        self.regime_thresholds = {
+            "roll_vol_median_train": vol_median,
+            "roll_vol_median_full_sample_FOR_AUDIT_ONLY": full_median,
+            "r_thresh": 0.02,
+            "v_thresh": 20.0,
+            "high_infl": 0.03,
+            "low_growth": 0.0,
+            "train_end_row": train_end,
+        }
+
+        labeled = label_market_regimes(
+            merged, vol_median=vol_median, price_col='market_close', vol_col='vix_daily'
+        )
+        labeled = label_macro_regimes(labeled, infl_col='cpi_mom', gdp_col='gdp_yoy')
+        # drop intermediate helper cols (roll stats are backward-looking but
+        # redundant with the labels; keep parity with the legacy feature set)
+        for c in ['roll_return','roll_vol','infl_yoy','gdp_growth_yoy']:
+            if c in labeled.columns:
+                labeled = labeled.drop(columns=[c])
+        self.merged_raw = labeled
+        return labeled
 
     # ---------------------------
     # Split into train/val/test chronologically (on merged_raw)
     # ---------------------------
     def split_chronologically(self, train_ratio: float = config.TRAIN_RATIO, val_ratio: float = config.VAL_RATIO) -> Tuple[pd.DataFrame,pd.DataFrame,pd.DataFrame]:
         if not hasattr(self, "merged_raw"):
-            self.preprocess_raw_merge()
+            # build + label with the SAME ratio used for the split
+            if not hasattr(self, "merged_unlabeled"):
+                self.preprocess_raw_merge()
+            train_end = int(len(self.merged_unlabeled) * train_ratio)
+            self._label_regimes(train_end)
         n = len(self.merged_raw)
         train_end = int(n * train_ratio)
+        # Guard: the labeling threshold must have been fitted on exactly the
+        # rows that now form the train split (no relabeling with a different
+        # boundary).
+        assert self.regime_thresholds["train_end_row"] == train_end, (
+            f"regime thresholds were fitted with train_end="
+            f"{self.regime_thresholds['train_end_row']} but split uses {train_end};"
+            f" re-run preprocess_and_split with consistent ratios"
+        )
         val_end = int(n * (train_ratio + val_ratio))
         self.train_df = self.merged_raw.iloc[:train_end].copy()
         self.val_df = self.merged_raw.iloc[train_end:val_end].copy()
@@ -515,14 +645,17 @@ class TimeGradDataModule:
 
     def preprocess_and_split(self, train_ratio: float = config.TRAIN_RATIO, val_ratio: float = config.VAL_RATIO):
         """
-        New main pipeline function.
-        1. Builds raw blocks.
-        2. Merges, adds features, and labels regimes.
-        3. Splits into train/val/test.
+        New main pipeline function (Phase 1 ordering).
+        1. Builds raw blocks, merges, adds calendar + roll stats (no thresholds).
+        2. Determines the chronological split boundary.
+        3. Fits regime thresholds on TRAIN ONLY, labels regimes, splits.
         4. Fits scalers/PCA on train and transforms all splits.
         """
-        if not hasattr(self, "merged_raw"):
+        if not hasattr(self, "merged_unlabeled"):
             self.preprocess_raw_merge()
+        if not hasattr(self, "merged_raw"):
+            train_end = int(len(self.merged_unlabeled) * train_ratio)
+            self._label_regimes(train_end)
         self.split_chronologically(train_ratio, val_ratio)
         self.fit_transform_train()
     # ---------------------------
@@ -555,7 +688,7 @@ class TimeGradDataModule:
         # target scaler + PCA
         print("🔄 [Scaling/PCA] Fitting target scaler and PCA...")
         if target_ohlc_den_cols:
-            X_target_train = df_train[target_ohlc_den_cols].fillna(method='ffill').fillna(0).to_numpy()
+            X_target_train = df_train[target_ohlc_den_cols].pipe(_ffill_checked).to_numpy()
             X_target_train = _ensure_2d(X_target_train)
             target_scaler = StandardScaler().fit(X_target_train)
             self.scalers['target_scaler'] = target_scaler
@@ -569,13 +702,18 @@ class TimeGradDataModule:
         # market scaler + PCA
         print("🔄 [Scaling/PCA] Fitting market scaler and PCA...")
         if market_ret_cols:
-            X_market_train = df_train[market_ret_cols].fillna(method='ffill').fillna(0).to_numpy()
+            X_market_train = df_train[market_ret_cols].pipe(_ffill_checked).to_numpy()
             X_market_train = _ensure_2d(X_market_train)
             market_scaler = StandardScaler().fit(X_market_train)
             self.scalers['market_scaler'] = market_scaler
             market_scaled_train = market_scaler.transform(X_market_train)
             pca_market = PCA(n_components=self.pca_variance, svd_solver='full').fit(market_scaled_train)
             self.pcas['market_pca'] = pca_market
+            # volume scaler: fitted on TRAIN only, explicitly (the legacy code
+            # fitted it lazily inside the first transform call).
+            if 'market_volume_raw' in df_train.columns:
+                vol_train = df_train[['market_volume_raw']].pipe(_ffill_checked).to_numpy()
+                self.scalers['volume_scaler'] = StandardScaler().fit(vol_train)
         else:
             pca_market = None
         print("✅ Done.")
@@ -583,7 +721,7 @@ class TimeGradDataModule:
         # daily macro scaler
         print("🔄 [Scaling/PCA] Fitting daily macro scaler...")
         if daily_macro_cols:
-            X_daily_train = df_train[daily_macro_cols].fillna(method='ffill').fillna(0).to_numpy()
+            X_daily_train = df_train[daily_macro_cols].pipe(_ffill_checked).to_numpy()
             X_daily_train = _ensure_2d(X_daily_train)
             daily_macro_scaler = StandardScaler().fit(X_daily_train)
             self.scalers['daily_macro_scaler'] = daily_macro_scaler
@@ -592,7 +730,7 @@ class TimeGradDataModule:
         # monthly macro scaler + PCA
         print("🔄 [Scaling/PCA] Fitting monthly macro scaler and PCA...")
         if monthly_macro_cols:
-            X_monthly_train = df_train[monthly_macro_cols].fillna(method='ffill').fillna(0).to_numpy()
+            X_monthly_train = df_train[monthly_macro_cols].pipe(_ffill_checked).to_numpy()
             X_monthly_train = _ensure_2d(X_monthly_train)
             monthly_scaler = StandardScaler().fit(X_monthly_train)
             self.scalers['monthly_macro_scaler'] = monthly_scaler
@@ -606,7 +744,7 @@ class TimeGradDataModule:
         # quarterly macro scaler + PCA
         print("🔄 [Scaling/PCA] Fitting quarterly macro scaler and PCA...")
         if quarterly_macro_cols:
-            X_quarterly_train = df_train[quarterly_macro_cols].fillna(method='ffill').fillna(0).to_numpy()
+            X_quarterly_train = df_train[quarterly_macro_cols].pipe(_ffill_checked).to_numpy()
             X_quarterly_train = _ensure_2d(X_quarterly_train)
             quarterly_scaler = StandardScaler().fit(X_quarterly_train)
             self.scalers['quarterly_macro_scaler'] = quarterly_scaler
@@ -630,8 +768,8 @@ class TimeGradDataModule:
         print(f"[fit_transform_train] train_df rows: {len(self.train_df)}")
         print(f"[fit_transform_train] target cols: {target_ohlc_den_cols} -> train shape {X_target_train.shape if target_ohlc_den_cols else None}")
         print(f"[fit_transform_train] market cols: {market_ret_cols} -> train shape {X_market_train.shape if market_ret_cols else None}")
-        if 'volume_raw' in self.train_df.columns:
-            print(f"[fit_transform_train] example volume_raw len: {len(self.train_df['volume_raw'].fillna(0))}")
+        if 'market_volume_raw' in self.train_df.columns:
+            print(f"[fit_transform_train] example market_volume_raw len: {len(self.train_df['market_volume_raw'])}")
 
         # ---- Transform train/val/test using fitted scalers + pcas
         self._transform_all_splits()
@@ -643,7 +781,7 @@ class TimeGradDataModule:
             # ----- target PCA -----
             tcols = self._col_sets['target_ohlc_den_cols']
             if tcols and 'target_scaler' in self.scalers and 'target_pca' in self.pcas:
-                X_t = df[tcols].fillna(method='ffill').fillna(0).to_numpy()
+                X_t = df[tcols].pipe(_ffill_checked).to_numpy()
                 X_t = _ensure_2d(X_t)
                 t_scaled = self.scalers['target_scaler'].transform(X_t)
                 t_pca = self.pcas['target_pca'].transform(t_scaled)
@@ -658,7 +796,7 @@ class TimeGradDataModule:
             # ----- market PCA -----
             mcols = self._col_sets['market_ret_cols']
             if mcols and 'market_scaler' in self.scalers and 'market_pca' in self.pcas:
-                X_m = df[mcols].fillna(method='ffill').fillna(0).to_numpy()
+                X_m = df[mcols].pipe(_ffill_checked).to_numpy()
                 X_m = _ensure_2d(X_m)
                 m_scaled = self.scalers['market_scaler'].transform(X_m)
                 m_pca = self.pcas['market_pca'].transform(m_scaled)
@@ -669,34 +807,22 @@ class TimeGradDataModule:
                 # ✅ FIX: always concatenate using DataFrame, never assign .values
                 df = pd.concat([df, m_pca_df], axis=1)
 
-                # volume handling: use separate scaler if available
-                if 'volume_raw' in df.columns:
-                    # Always fill NaNs to avoid scaler errors
-                    vol_vals = df['volume_raw'].fillna(0).to_numpy().reshape(-1, 1)
-
-                    # Fit scaler only once, during training
+                # volume handling: scaler fitted on TRAIN in fit_transform_train
+                if 'market_volume_raw' in df.columns:
                     if 'volume_scaler' not in self.scalers:
-                        print("[fit_volume_scaler] fitting StandardScaler on volume_raw (train only)")
-                        self.scalers['volume_scaler'] = StandardScaler().fit(vol_vals)
-
-                    # Always transform using the fitted scaler
+                        raise RuntimeError(
+                            "volume_scaler missing — fit_transform_train must fit it on train first"
+                        )
+                    vol_vals = df[['market_volume_raw']].pipe(_ffill_checked).to_numpy()
                     vol_scaled = self.scalers['volume_scaler'].transform(vol_vals)
-                    print(
-                        f"[volume debug] len(df)={len(df)}, "
-                        f"vol_vals.shape={vol_vals.shape}, "
-                        f"vol_scaled.shape={vol_scaled.shape}"
-                    )
-                    vol_scaled = vol_scaled[:len(df)]
                     df['volume_scaled'] = vol_scaled.reshape(-1)
-
-                    print(f"[volume_scaled] df len={len(df)}, vol_scaled shape={vol_scaled.shape}")
                 else:
-                    print("[volume_scaled] no volume_raw column found — skipping")
+                    print("[volume_scaled] no market_volume_raw column found — skipping")
 
             # ----- daily macro scaled -----
             dcols = self._col_sets['daily_macro_cols']
             if dcols and 'daily_macro_scaler' in self.scalers:
-                X_d = df[dcols].fillna(method='ffill').fillna(0).to_numpy()
+                X_d = df[dcols].pipe(_ffill_checked).to_numpy()
                 X_d = _ensure_2d(X_d)
                 d_scaled = self.scalers['daily_macro_scaler'].transform(X_d)
                 dcols_names = [f"daily_{c}_scaled" for c in dcols]
@@ -706,7 +832,7 @@ class TimeGradDataModule:
             # ----- monthly PCA -----
             mcols2 = self._col_sets['monthly_macro_cols']
             if mcols2 and 'monthly_macro_scaler' in self.scalers and 'monthly_pca' in self.pcas:
-                X_mm = df[mcols2].fillna(method='ffill').fillna(0).to_numpy()
+                X_mm = df[mcols2].pipe(_ffill_checked).to_numpy()
                 X_mm = _ensure_2d(X_mm)
                 mm_scaled = self.scalers['monthly_macro_scaler'].transform(X_mm)
                 mm_pca = self.pcas['monthly_pca'].transform(mm_scaled)
@@ -718,7 +844,7 @@ class TimeGradDataModule:
             # ----- quarterly PCA -----
             qcols = self._col_sets['quarterly_macro_cols']
             if qcols and 'quarterly_macro_scaler' in self.scalers and 'quarterly_pca' in self.pcas:
-                X_qq = df[qcols].fillna(method='ffill').fillna(0).to_numpy()
+                X_qq = df[qcols].pipe(_ffill_checked).to_numpy()
                 X_qq = _ensure_2d(X_qq)
                 qq_scaled = self.scalers['quarterly_macro_scaler'].transform(X_qq)
                 qq_pca = self.pcas['quarterly_pca'].transform(qq_scaled)
@@ -793,8 +919,7 @@ class TimeGradDataModule:
 
         regime_cols = [c for c in df.columns if c.startswith(('market_regime_', 'vol_regime_', 'macro_regime_'))]
 
-        return {
-            "target": target_cols,
+        return {            "target": target_cols,
             "daily": daily_cols,
             "monthly": monthly_cols,
             "regime": regime_cols
@@ -828,39 +953,6 @@ class TimeGradDataModule:
 # =========================================================
 # 5. PyTorch Datasets
 # =========================================================
-""" leave just in case if the new dataset module works erroneously
-class TimeGradDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, target_cols: List[str], cond_cols: List[str],
-                 seq_len: int = config.DEFAULT_SEQ_LEN, forecast_horizon: int = config.DEFAULT_HORIZON, device: str = "cpu"):
-        self.df = df.dropna(subset=target_cols + cond_cols)
-        self.target_cols = target_cols
-        self.cond_cols = cond_cols
-        self.seq_len = seq_len
-        self.forecast_horizon = forecast_horizon
-        self.device = device
-
-        self.x = self.df[target_cols].values.astype(np.float32)
-        self.c = self.df[cond_cols].values.astype(np.float32)
-        self.time_index = self.df.index
-        self.n_samples = len(self.df) - seq_len - forecast_horizon + 1
-        if self.n_samples < 1:
-            raise ValueError("Not enough data to build any sequence with given seq_len and forecast_horizon.")
-
-    def __len__(self):
-        return self.n_samples
-
-    def __getitem__(self, idx):
-        x_hist = self.x[idx: idx + self.seq_len]
-        c_hist = self.c[idx: idx + self.seq_len]
-        x_future = self.x[idx + self.seq_len: idx + self.seq_len + self.forecast_horizon]
-        return {
-            "x_hist": torch.tensor(x_hist, device=self.device),
-            "c_hist": torch.tensor(c_hist, device=self.device),
-            "x_future": torch.tensor(x_future, device=self.device),
-            "time": self.time_index[idx: idx + self.seq_len + self.forecast_horizon]
-        }
-"""
-        
 class ConditionalTimeGradDataset(Dataset):
     """
     Dataset designed for the ConditionalTimeGrad model.
@@ -908,11 +1000,3 @@ class ConditionalTimeGradDataset(Dataset):
 
         # 3. Static conditioning features (regime labels)
         # Use the regime from the last day of the history window as the "instruction"
-        cond_static = self.regime_data[hist_end - 1]
-
-        return {
-            "x_future": torch.tensor(x_future, device=self.device),
-            "x_hist": torch.tensor(x_hist, device=self.device),
-            "cond_dynamic": torch.tensor(cond_dynamic, device=self.device),
-            "cond_static": torch.tensor(cond_static, device=self.device),
-        }

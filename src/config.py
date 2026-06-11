@@ -52,6 +52,11 @@ FRED_QUARTERLY_IDS = {
 # -----------------------------------------------------------------------------
 WAVELET = "db4"
 WAVELET_LEVEL = 3
+# Phase 1.1: rolling window for the causal wavelet denoiser (new in Phase 1;
+# the legacy denoiser had no window — it transformed the full series, which
+# leaked future data). Must be >= 2**WAVELET_LEVEL * 4 = 32; 64 matches the
+# model context length.
+WAVELET_WINDOW = 64
 PCA_VARIANCE = 0.95
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
