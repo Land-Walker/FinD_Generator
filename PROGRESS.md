@@ -40,3 +40,27 @@ A previous sandbox session implemented Phase 0 (per its own PROGRESS.md: `src/ut
 
 ### Execution plan
 1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence 
+## 2026-06-11 — Phase 0 COMPLETE (Reproducibility Foundation)
+
+### What was done (file-level)
+- `src/utils/seed.py` (new): `set_global_seed` — python random, numpy, torch CPU+CUDA, `cudnn.deterministic=True`, `cudnn.benchmark=False`, exports PYTHONHASHSEED. Rejects bool/negative/non-int seeds.
+- `src/utils/run_folder.py` (new): `create_run_folder` → `runs/<run_name>__<timestamp>__seed<seed>/` with `config.yaml` (resolved, via OmegaConf), `git_sha.txt`, `git_diff.patch`, and subfolders `metrics/ plots/ samples/ logs/ checkpoints/`. Git metadata is captured through a throwaway index built from HEAD so a corrupt/stale `.git/index` cannot poison the diff; git failures are written into the artifact files verbatim, never swallowed.
+  - Naming decision: the spec's pattern was garbled in transmission ("runs/<run_name>seed/"); chose `<run_name>__<timestamp>__seed<seed>` + collision counter so same-name/same-seed runs (the D3 protocol) never overwrite.
+- `configs/default.yaml` (new): mirrors every run.py CLI flag; values byte-identical to the prior argparse defaults (E3: zero default changes; prior values noted in comments).
+- `run.py` (rewritten): omegaconf config loading (HARD dependency per W2.1 — no fallback; missing file/keys/unknown keys raise), CLI-overrides-config merge, `--seed` required, `--run-name`, `--config`; all outputs now inside the run folder (checkpoint → `checkpoints/model_last.pt`, forecasts → `samples/forecasts.pt`; previously they went to `data/processed/`); per-epoch JSONL `metrics/train_log.jsonl` with train_loss/val_loss/lr/wallclock/gpu_mem. `DataCollector` import made lazy (W2.5) and its re-export removed from `src/preprocessor/__init__.py`.
+- `requirements.txt`: pinned to verified environment versions; added omegaconf, properscoring, arch, statsmodels, scipy, tqdm (+pytest, pyflakes as dev tools). No wandb.
+- `.gitignore`: `runs/*` ignored except `runs/_selfcheck/`.
+
+### Tests added
+- `tests/test_seed.py` (6 tests), `tests/test_run_folder.py` (3 tests), `tests/test_reproducibility.py` (1 CLI-level test: two subprocess runs, seed 0, exact float equality of loss trajectory). Full suite: **10 passed**.
+
+### Numbers (BEFORE/AFTER)
+- No metric semantics changed in this phase. Smoke reference point (seed 0, 2 train steps): train_loss 0.732781708240509, val_loss 0.5519608557224274 — bit-for-bit identical across repeated runs; generated forecasts tensor also `torch.equal` across runs.
+- W2.5 status: of the four known bugs, two were already fixed on main (keyword DataModule ctor, keyword sample_autoregressive); eager DataCollector import fixed this phase; wavelet read-only crash did not reproduce in the smoke path (will re-check in Phase 1 when wavelet code is rewritten).
+
+### Surprises / negative findings
+- None affecting results. Toolchain notes: the shared-folder mount intermittently truncates files written via the desktop file API and corrupts `.git/index`; mitigated by writing code from the shell side, a sandbox-local git index, and verifying file sizes. CUDA absent (CPU-only, 2 cores) — already flagged at W0.4 for Phase 4.4 feasibility.
+- `tests/test_reproducibility.py` caps steps (3 train/2 val) — same pattern as the spec's own D2/D3 protocol; the determinism property is unaffected. Justification recorded per D5.
+
+### Owner decisions pending
+- None. No BLOCKED.md. Phase 0 acceptance checks all pass (see runs/_selfcheck/phase0__02_config_runpy_reprotest.md).
