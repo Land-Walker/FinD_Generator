@@ -177,8 +177,12 @@ def align_and_handle_missing_values(
 
         return df_copy
 
-    # Quarterly -> monthly frequency, ffill past values only
-    quarterly_aligned = preprocess_df(quarterly_df, suffix='_quarterly', freq='MS')
+    # Quarterly -> monthly frequency, ffill past values only.
+    # NO suffix here: the legacy '_quarterly' suffix renamed 'gdp' to
+    # 'gdp_quarterly', so process_quarterly_macro_raw found none of its
+    # expected columns and silently produced an EMPTY block — no gdp_yoy, and
+    # therefore degenerate all-'normal' macro regimes (see KNOWN_ISSUES.md).
+    quarterly_aligned = preprocess_df(quarterly_df, freq='MS')
 
     # Monthly -> keep original frequency, ffill past values
     monthly_df_sorted = preprocess_df(monthly_df)
