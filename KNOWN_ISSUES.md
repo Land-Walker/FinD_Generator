@@ -54,3 +54,11 @@ Fixed items name the fixing commit; open items await owner decision.
 
 ## 7. Pre-existing lint noise in untouched files — OPEN (cosmetic)
 - `src/__init__.py` re-export false positives (pyflakes).
+
+## 8. Weekend month-end observations were silently dropped — FIXED (Phase 1)
+- Repro (pre-fix): monthly/quarterly values are mapped to calendar month-ends
+  before reindexing onto the business-day grid; `.reindex(daily_index).ffill()`
+  discards any value whose month-end is a Saturday/Sunday (not in the grid),
+  so those months kept showing the PREVIOUS month's data (e.g. Feb-2015 rows
+  carried December-2014 macro values). Discovered by tests/test_no_leakage.py.
+- Fix: `.reindex(daily_index, method="ffill")` — still past-only, no data loss.

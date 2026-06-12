@@ -409,8 +409,13 @@ def merge_all_blocks_unified(
     monthly_macro.index = monthly_macro.index.to_period("M").to_timestamp("M")
     quarterly_macro.index = quarterly_macro.index.to_period("M").to_timestamp("M")
 
-    monthly_aligned_daily = monthly_macro.reindex(daily_index).ffill()
-    quarterly_aligned_daily = quarterly_macro.reindex(daily_index).ffill()
+    # reindex with method='ffill' (still past-only) so observations whose
+    # month-end falls on a weekend are carried forward instead of silently
+    # dropped — the legacy `.reindex(daily_index).ffill()` discarded any
+    # monthly/quarterly value whose mapped month-end was not a business day,
+    # leaving those months stuck on the previous month's data.
+    monthly_aligned_daily = monthly_macro.reindex(daily_index, method="ffill")
+    quarterly_aligned_daily = quarterly_macro.reindex(daily_index, method="ffill")
 
     # --- Step 5: concatenate all blocks ---
     merged_df = pd.concat([daily_macro, monthly_aligned_daily, quarterly_aligned_daily, t, mkt], axis=1)
@@ -1004,3 +1009,11 @@ class ConditionalTimeGradDataset(Dataset):
 
         # 3. Static conditioning features (regime labels)
         # Use the regime from the last day of the history window as the "instruction"
+        cond_static = self.regime_data[hist_end - 1]
+
+        return {
+            "x_future": torch.tensor(x_future, device=self.device),
+            "x_hist": torch.tensor(x_hist, device=self.device),
+            "cond_dynamic": torch.tensor(cond_dynamic, device=self.device),
+            "cond_static": torch.tensor(cond_static, device=self.device),
+        }
