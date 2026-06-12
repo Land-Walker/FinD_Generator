@@ -39,7 +39,14 @@ A previous sandbox session implemented Phase 0 (per its own PROGRESS.md: `src/ut
 - The master directive layers on top of an "original Phase 0→4 specification (Sections A–G)" (Section C 0.1–0.6 / 1.1–1.5 step definitions, self-checks D1–D6, commit style E2, BLOCKED rules A2, anti-cheat F). That document is **not in the repo and was not provided in this session**; only a high-level outline of it survives in the codex branch PROGRESS.md. Owner has been asked to either supply the original spec or authorize execution from the directive + outline alone. This is recorded here rather than in BLOCKED.md because work can proceed the moment the owner answers.
 
 ### Execution plan
-1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence 
+1. **Phase 0 — Reproducibility Foundation**: seeding utility (`src/utils/seed.py`), omegaconf config (`configs/default.yaml`, hard dependency, fail loudly), run-folder artifact management under `runs/`, train-log persistence (`metrics/train_log.jsonl`), pinned requirements, determinism test with pasted same-seed diff evidence (W2.4), pyflakes in self-check (W2.3), known bug fixes per W2.5.
+2. **Phase 1 — Causal Data Hygiene**: remove look-ahead leakage (wavelet, missing-value handling: zero backward-fill per W2.2, `.ffill()` only per W2.7), train-only fit of the roll_vol median regime threshold (W2.6), `test_no_leakage.py` covering EVERY engineered feature with the list enumerated in `docs/data_integrity.md`, honest before/after 80%-coverage numbers.
+3. **★ MANDATORY STOP (W3.3)** — handoff in PROGRESS.md; wait for explicit owner approval.
+4. After approval: Phase 2 (regime_validation headline, effect sizes), Phase 3 (all four baselines, canonical table), Phase 4 rescoped (4.3 calibration MANDATORY, 4.4 CFG MANDATORY, 4.1 DDIM optional, 4.2/4.5 CUT), Phase 5 stress-testing showcase (`src/stress_demo/`, README rewrite marked DRAFT), FINAL_REPORT.md + 10-line owner action list.
+
+### Positioning (governs all reports)
+FinD_Generator is a regime-conditional stress scenario generator. Headline result = controllable regime conditioning (`regime_validation`), not beating classical baselines on unconditional stylized facts. Baseline wins on unconditional metrics are expected, reportable findings for the limitations section.
+
 ## 2026-06-11 — Phase 0 COMPLETE (Reproducibility Foundation)
 
 ### What was done (file-level)
