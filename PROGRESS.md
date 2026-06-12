@@ -64,3 +64,45 @@ A previous sandbox session implemented Phase 0 (per its own PROGRESS.md: `src/ut
 
 ### Owner decisions pending
 - None. No BLOCKED.md. Phase 0 acceptance checks all pass (see runs/_selfcheck/phase0__02_config_runpy_reprotest.md).
+
+## 2026-06-12 — Phase 1 COMPLETE (Causal Data Hygiene) — ★ MANDATORY STOP (W3.3) ★
+
+### What was done (file-level)
+- `src/preprocessor/data_loader.py`: causal rolling-window wavelet denoiser (1.1a, W=`WAVELET_WINDOW`=64, NaN warmup, `_denoise_window` kernel exposed for audits, `to_numpy(copy=True)` read-only fix); every bfill removed with leading-row drop + loud NaN guards (1.2i, `_ffill_checked`); regime labeling moved AFTER the split boundary with the roll_vol median fitted on TRAIN only, frozen, asserted, and stored in `dm.regime_thresholds` (1.3); volume scaler fitted explicitly on train; duplicate `volume_raw` columns renamed (`target_`/`market_volume_raw`); quarterly macro block restored (suffix bug); weekend month-end macro observations no longer dropped (`reindex(method="ffill")`); legacy commented-out dataset class removed.
+- `src/config.py`: new `WAVELET_WINDOW = 64` (new constant — no prior value existed because the legacy denoiser had no window; justification: ≥ 2³·4 = 32 minimum, matches context length 64).
+- `scripts/coverage_probe.py`: resumable fixed-protocol probe (64 windows × 16 samples, seed 0) of `conditional_timegrad_best.pt` on the legacy test frame.
+- `tests/test_no_leakage.py` (3 tests), `tests/test_causal_wavelet.py` (6 tests).
+- `docs/data_integrity.md` (58-row audit table), `KNOWN_ISSUES.md` (8 entries).
+
+### Tests added
+- `test_no_leakage.py::test_every_feature_is_causal` — 100 random val/test timestamps; every feature independently recomputed from truncated raw data; 0 violations.
+- `test_no_leakage.py::test_threshold_is_train_only`, `test_no_leakage.py::test_no_bfill_in_pipeline_source`.
+- `test_causal_wavelet.py` — future-mutation invariance, warmup NaNs, kernel equivalence, constant reconstruction, window floor, no-backfill of leading NaNs.
+- Full suite: **19 passed** (D1).
+
+### Numbers (BEFORE → AFTER)
+- **80% coverage (Phase 1 acceptance number): BEFORE = 0.1165** (probe, `runs/coverage_probe_before/coverage_report.json`; README's historical protocol: 0.0938). **AFTER = not measurable with the existing checkpoints**: the repaired pipeline emits cond_dynamic 25 / cond_static 10 vs the checkpoints' 22 / 6 (they were trained on the legacy frames that lack quarterly features and real macro regimes). An after-fix number requires retraining → owner decision (W0.6).
+- Smoke loss reference (seed 0, 2 steps): train 0.7328 → **0.6553**, val 0.5520 → **0.5086** (expected shift: feature values and dataset rows changed under the causal pipeline; same seed, same protocol).
+- Dataset rows: 7302 → 7239 merged (leading warmup drop); windows 5044/1027/1028 → 4999/1018/1018.
+- Regime thresholds: roll_vol median train-only 0.008680 (leaky full-sample value was 0.007944). Macro regimes after quarterly restore: expansion 7006 / recession 233 / high_inflation 0 / stagflation 0 / normal 0 rows.
+
+### What surprised us / negative findings (honest)
+1. **Raw data is 1992–2019, not 2000–2023** as config/README claim (KNOWN_ISSUES #3) — every historical number, and both checkpoints, are fitted on 1992–2019.
+2. **The quarterly macro block was entirely empty** in the legacy pipeline (suffix bug) — so the "macro regime" conditioning the README describes was a constant 'normal' one-hot during the existing checkpoints' training.
+3. **high_inflation/stagflation regimes have zero data support** under the frozen 3% monthly-CPI threshold (KNOWN_ISSUES #5) — Phase 2's macro-regime validation will necessarily be limited to expansion/recession; stagflation conditioning can only be exercised via scenario override on one-hots the model never saw in training.
+4. The no-leakage test caught a real alignment defect beyond the spec'd three (weekend month-end data loss, KNOWN_ISSUES #8) — exactly what it exists for.
+5. Existing checkpoints are dimensionally incompatible with the repaired pipeline (KNOWN_ISSUES #6) — this constrains Phase 2/3 design (see decisions below).
+
+### ★ OWNER REVIEW — files to inspect ★
+- `tests/test_no_leakage.py` — the audit logic (feature list = docs/data_integrity.md table).
+- `docs/data_integrity.md` — 58-row coverage table + before/after coverage statement.
+- Modified preprocessing: `src/preprocessor/data_loader.py` (wavelet_denoise_series, merge_all_blocks_unified, _label_regimes, fit_transform_train/_transform_all_splits), `src/config.py`.
+- `KNOWN_ISSUES.md` — especially #3 (data span), #5 (unreachable regimes), #6 (checkpoint incompatibility).
+- Self-checks: `runs/_selfcheck/phase1__causal_data_hygiene.md`.
+
+### Owner decisions needed before Phase 2 (W3.4 approval gate)
+1. **Checkpoint strategy** (KNOWN_ISSUES #6): (a) evaluate existing checkpoints on the preserved LEGACY frames (`data/processed/*_processed.csv`, horizon 24) as the spec's Phase 2 acceptance assumes, and run the post-fix pipeline only for newly trained models later; or (b) approve retraining conditional+vanilla models on the repaired pipeline now (CPU-only: feasibility estimate required first, W0.4).
+2. **Data span** (KNOWN_ISSUES #3): keep 1992–2019 (document) or re-download 2000–2023 (invalidates all existing artifacts).
+3. Acknowledge #4/#5 (gdp_yoy semantics, unreachable inflation regimes) as documented limitations, or schedule a redesign (changes the modeling problem).
+
+No BLOCKED.md: nothing ambiguous remains inside Phase 1 itself; the items above are the natural gate decisions. **Stopped per W3.3 — Phase 2 will not begin until explicit owner approval.**
