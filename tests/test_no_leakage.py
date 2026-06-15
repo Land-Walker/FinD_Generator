@@ -234,7 +234,8 @@ def test_every_feature_is_causal(pipeline, sampled_timestamps):
         # --- scaled / PCA features (train-fitted transforms on recomputed raw)
         tvec = np.array([[target_den[c] for c in ["open_den", "high_den", "low_den", "close_den"]]])
         t_pca = dm.pcas["target_pca"].transform(dm.scalers["target_scaler"].transform(tvec))
-        check(t, "target_pca_1", float(t_pca[0, 0]), trans_row["target_pca_1"])
+        for i in range(t_pca.shape[1]):
+            check(t, f"target_pca_{i+1}", float(t_pca[0, i]), trans_row[f"target_pca_{i+1}"])
 
         mvec = np.array([[market_ret[c] for c in ["open_ret", "high_ret", "low_ret", "close_ret"]]])
         m_pca = dm.pcas["market_pca"].transform(dm.scalers["market_scaler"].transform(mvec))
