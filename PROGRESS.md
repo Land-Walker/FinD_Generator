@@ -113,3 +113,37 @@ FinD_Generator is a regime-conditional stress scenario generator. Headline resul
 3. Acknowledge #4/#5 (gdp_yoy semantics, unreachable inflation regimes) as documented limitations, or schedule a redesign (changes the modeling problem).
 
 No BLOCKED.md: nothing ambiguous remains inside Phase 1 itself; the items above are the natural gate decisions. **Stopped per W3.3 — Phase 2 will not begin until explicit owner approval.**
+
+## 2026-06-16 — Phase 1.5 Post-hoc Cleanups (SCope Lock handoff)
+
+### What was done
+- **1.1** Already committed (`ff902a3`, 2026-06-15): the `target_pca` loop in `test_no_leakage.py:236-238` was generalized from a single-element check to `for i in range(t_pca.shape[1])`, matching the pattern of all other PCA features (market, monthly, quarterly). This was the only PCA check that hardcoded `target_pca_1` instead of looping.
+- **1.2 "No data after t" spec clarification**: The no-leakage spec in `tests/test_no_leakage.py` docstring and `docs/data_integrity.md` line 9 is clarified: a feature value *at* t may legitimately use data dated ≤ t (e.g., a return at t uses the close at t and t-1). "No look-ahead" means no data dated **after** t, not "strictly before" t. The test's truncation at t (exclusive of future, inclusive of present) is the correct interpretation and is documented in both files.
+- **1.3 Test bodies recorded below**.
+
+### Wavelet future-mutation test (`tests/test_causal_wavelet.py:25-36`):
+```python
+def test_causality_future_changes_do_not_affect_past():
+    s = _series()
+    out_full = wavelet_denoise_series(s, window=WINDOW)
+    t = 250
+    s_mod = s.copy()
+    s_mod.iloc[t + 1 :] += 1000.0  # violently change the future
+    out_mod = wavelet_denoise_series(s_mod, window=WINDOW)
+    past_full = out_full.iloc[WINDOW - 1 : t + 1].to_numpy()
+    past_mod = out_mod.iloc[WINDOW - 1 : t + 1].to_numpy()
+    np.testing.assert_array_equal(past_full, past_mod)
+```
+
+### Train-only-threshold test (`tests/test_no_leakage.py:268-277`):
+```python
+def test_threshold_is_train_only(pipeline):
+    dm, _ = pipeline
+    th = dm.regime_thresholds
+    train_end = th["train_end_row"]
+    expected = float(
+        dm.merged_unlabeled.iloc[:train_end]["roll_vol"].median()
+    )
+    assert th["roll_vol_median_train"] == expected
+    assert th["roll_vol_median_train"] != th["roll_vol_median_full_sample_FOR_AUDIT_ONLY"]
+```
