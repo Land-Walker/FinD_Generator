@@ -6,6 +6,7 @@ Tests on synthetic data with known properties:
 - GARCH-like → ACF(|r|) > 0.
 """
 import numpy as np
+import pytest
 from scipy import stats as sp_stats
 
 from src.evaluation.stylized_facts import (
@@ -87,6 +88,33 @@ def test_leverage_effect():
             r[i] *= 2.0
     lev = leverage_effect(r, lags=5)
     assert np.any(lev < -0.01)  # at least some negative
+
+
+def test_drawdown_distribution_known():
+    """Drawdown on a path with known 10% drop.
+    
+    Uses arithmetic returns (not log) since drawdown_distribution applies
+    cumprod(1+r), which is the standard formula for simple returns.
+    """
+    r = np.array([-0.10, 1/9])  # -10%, +11.11% → round-trip to par
+    dd = drawdown_distribution(r)
+    assert dd['max_drawdown'] == pytest.approx(-0.10, abs=0.01)
+    assert dd['max_drawdown_duration'] == 1
+    assert dd['mean_drawdown'] == pytest.approx(-0.10, abs=0.01)
+
+
+def test_drawdown_distribution_multi_path():
+    """Multi-path drawdown aggregates independent paths correctly."""
+    paths = np.array([
+        [-0.10, 1/9],                  # max DD = -10%, duration 1
+        [-0.20, 0.00],                 # max DD = -20%, duration 2 (below par)
+        [0.01, 0.01],                  # max DD = 0
+    ])
+    dd = drawdown_distribution(paths)
+    assert dd['max_drawdown'] == pytest.approx(-0.20, abs=0.02)
+    # mean_dd: (-0.10 + -0.20) / 2 = -0.15 (path 3 has no drawdown, excluded)
+    assert dd['mean_drawdown'] == pytest.approx(-0.15, abs=0.02)
+    assert dd['max_drawdown_duration'] == 2
 
 
 def test_drawdown_distribution():

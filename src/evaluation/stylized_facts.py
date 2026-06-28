@@ -78,17 +78,20 @@ def leverage_effect(returns: np.ndarray, lags: int = 20) -> np.ndarray:
     return result
 
 
-def drawdown_distribution(returns: np.ndarray) -> Dict[str, float]:
-    """Drawdown statistics: max, mean, and duration statistics.
+def _drawdown_single_path(returns: np.ndarray) -> Tuple[float, float, int]:
+    """Compute drawdown stats for a single price path.
 
-    Returns dict with 'max_drawdown', 'mean_drawdown', 'max_drawdown_duration'.
+    Pre-pends starting capital 1.0 so that an initial drop from par is captured.
     """
     cumulative = np.cumprod(1 + returns)
-    peak = np.maximum.accumulate(cumulative)
-    drawdown = (cumulative - peak) / peak
+    prepended = np.concatenate([[1.0], cumulative])
+    peak = np.maximum.accumulate(prepended)
+    drawdown = (cumulative - peak[1:]) / peak[1:]
     max_dd = float(np.min(drawdown))
-    mean_dd = float(np.mean(drawdown[drawdown < 0])) if np.any(drawdown < 0) else 0.0
-    # Duration: longest consecutive period in drawdown
+    if np.any(drawdown < 0):
+        mean_dd = float(np.mean(drawdown[drawdown < 0]))
+    else:
+        mean_dd = 0.0
     in_dd = drawdown < 0
     max_duration = 0
     current = 0
@@ -98,6 +101,38 @@ def drawdown_distribution(returns: np.ndarray) -> Dict[str, float]:
             max_duration = max(max_duration, current)
         else:
             current = 0
+    return max_dd, mean_dd, max_duration
+
+
+def drawdown_distribution(returns: np.ndarray) -> Dict[str, float]:
+    """Drawdown statistics: max, mean, and duration statistics.
+
+    Parameters
+    ----------
+    returns : np.ndarray, shape (n_steps,) or (n_paths, n_steps)
+        If 1-d: single continuous price path.
+        If 2-d: independent paths (rows); stats are aggregated across paths
+        returning the worst max_drawdown, mean of mean drawdowns, and
+        longest drawdown duration.
+
+    Returns dict with 'max_drawdown', 'mean_drawdown', 'max_drawdown_duration'.
+    """
+    if returns.ndim == 2:
+        max_dds = []
+        mean_dds = []
+        max_durations = []
+        for r in returns:
+            max_dd, mean_dd, max_dur = _drawdown_single_path(r)
+            max_dds.append(max_dd)
+            if mean_dd < 0:
+                mean_dds.append(mean_dd)
+            max_durations.append(max_dur)
+        return {
+            'max_drawdown': float(np.min(max_dds)) if max_dds else 0.0,
+            'mean_drawdown': float(np.mean(mean_dds)) if mean_dds else 0.0,
+            'max_drawdown_duration': int(np.max(max_durations)) if max_durations else 0,
+        }
+    max_dd, mean_dd, max_duration = _drawdown_single_path(returns)
     return {
         'max_drawdown': max_dd,
         'mean_drawdown': mean_dd,

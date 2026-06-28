@@ -147,3 +147,40 @@ def test_threshold_is_train_only(pipeline):
     assert th["roll_vol_median_train"] == expected
     assert th["roll_vol_median_train"] != th["roll_vol_median_full_sample_FOR_AUDIT_ONLY"]
 ```
+
+## 2026-06-28 — Drawdown Bug Fix
+
+### Root cause
+`drawdown_distribution` in `stylized_facts.py` computed `cumprod(1+returns)` on a
+1D array. The call site in `compute_stylized_facts` did `gen_ret.ravel()`,
+flattening `(n_samples, n_windows, horizon-1)` into one long series. This
+treated thousands of independent 4-step forecast paths as a single concatenated
+price path, producing spurious results:
+- max_drawdown = -1.0 (price collapsed to ~zero across window boundaries)
+- max_drawdown_duration = 351,009 (nearly the entire flattened length)
+
+### Fix (stylized_facts.py + run_eval.py)
+- `stylized_facts.py`: added `_drawdown_single_path` helper that prepends
+  starting capital 1.0 (captures initial drop from par). `drawdown_distribution`
+  now accepts 2D `(n_paths, n_steps)` input → per-path computation →
+  aggregation (`max_drawdown` = worst across paths, `mean_drawdown` = mean of
+  per-path means, `max_drawdown_duration` = longest).
+- `run_eval.py:178`: `compute_stylized_facts` now reshapes `gen_ret` to
+  `(-1, horizon-1)` 2D for drawdown, keeping the per-path semantics.
+- Real/denoised returns remain 1D (single continuous path — correct).
+- **Note:** the prepend-1.0 fix also corrects a pre-existing bug where the first
+  step's drawdown from par was not captured (affected all three columns). The
+  real/denoised drawdown values will shift slightly when eval is re-run on host.
+- Added `test_drawdown_distribution_known` (known -10% drop, duration=1) and
+  `test_drawdown_distribution_multi_path` (aggregated worst -20%, mean -0.15,
+  duration=2).
+
+### Files changed
+- `src/evaluation/stylized_facts.py` — `_drawdown_single_path` + 2D support
+- `src/evaluation/run_eval.py` — 2D reshape + EVALUATION_REPORT.md semantics note
+- `tests/test_evaluation_stylized.py` — 2 new tests
+
+### Impact
+- Full suite: 59 passed.
+- **Host action required:** re-run GPU evaluation after this commit
+  (`--eval` flag) so the EVALUATION_REPORT.md reflects corrected drawdown numbers.

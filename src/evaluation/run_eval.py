@@ -171,10 +171,19 @@ def compute_stylized_facts(
     real_ret_canon_1d = real_ret_canon.ravel()
     raw_ret = _get_raw_test_returns(dm)
 
+    gen_facts = sf.all_stylized_facts(gen_ret_1d)
+    # Override drawdown with per-path computation — each (sample, window) is an
+    # independent price path; concatenating them would create a spurious
+    # mega-path (351k+ steps) with boundary discontinuities.
+    gen_ret_paths = gen_ret.reshape(-1, gen_ret.shape[-1])
+    gen_dd = sf.drawdown_distribution(gen_ret_paths)
+    for k, v in gen_dd.items():
+        gen_facts[f'drawdown_{k}'] = v
+
     return {
         'real_raw_un_denoised': sf.all_stylized_facts(raw_ret),
         'real_denoised': sf.all_stylized_facts(real_ret_canon_1d),
-        'generated': sf.all_stylized_facts(gen_ret_1d),
+        'generated': gen_facts,
     }
 
 
@@ -442,6 +451,7 @@ def _write_evaluation_report(
         "## Sanity Check",
         f"- Reconstruction error ({recon_rmse:.4f}) is negligible relative to price scale.",
         "- stagflation (42 rows, 0.67%) is underpowered — see KNOWN_ISSUES #9.",
+        "- **Drawdown semantics:** real (raw/denoised) returns are a single continuous test-period price path → continuous drawdown. Generated returns are independent per-path drawdowns (one per (sample, window) horizon), aggregated: `max_drawdown` = worst across paths, `mean_drawdown` = mean, `max_drawdown_duration` = longest. This is correct for short-horizon forecasts — a 5-step path cannot be compared to a multi-year drawdown on a single concatenated series.",
         "- Baseline columns (hist_bootstrap, block_bootstrap, garch_t, vanilla_timegrad) are TODO — Phase 3.",
         "- Full regime-conditional evaluation on all test windows requires GPU (HOST_TASKS.md).",
     ]
