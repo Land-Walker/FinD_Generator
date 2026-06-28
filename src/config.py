@@ -25,13 +25,13 @@ DATA_FILENAMES = {
 # -----------------------------------------------------------------------------
 # Data Collection
 # -----------------------------------------------------------------------------
-START_DATE = "2000-01-01"
-END_DATE = "2023-12-31"
+START_DATE = "2000-01-01"  # Legacy: "1992-01-01" (raw data); before Phase 1.5: same
+END_DATE = "2024-12-31"  # Legacy: "2023-12-31" (config); "2019-12" (raw data); extended to 2024 per D-②
 MARKET_TICKER = "^GSPC"
 TARGET_TICKER = "SPY"
 
 FRED_DAILY_IDS = {
-    "DGS10": "yield_curve_daily",
+    "DGS10": "yield_curve",
 }
 FRED_MONTHLY_IDS = {
     "CPIAUCSL": "cpi",
