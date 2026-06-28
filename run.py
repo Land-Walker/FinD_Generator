@@ -171,13 +171,18 @@ def train_and_validate(
     device: torch.device,
     run_dir: Path,
 ) -> Path:
-    """Train the model, log one JSON line per epoch, save the checkpoint.
+    """Train the model, log one JSON line per epoch, save the last + best checkpoint.
 
-    Returns the checkpoint path inside the run folder.
+    Returns the *best* checkpoint path inside the run folder.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     train_log_path = run_dir / "metrics" / "train_log.jsonl"
-    checkpoint_path = run_dir / "checkpoints" / "model_last.pt"
+    last_path = run_dir / "checkpoints" / "model_last.pt"
+    best_path = run_dir / "checkpoints" / "model_best.pt"
+    best_epoch_path = run_dir / "metrics" / "best_epoch.json"
+
+    best_val = float("inf")
+    best_epoch = 0
 
     model.train()
     with open(train_log_path, "a", encoding="utf-8") as log_file:
@@ -229,11 +234,25 @@ def train_and_validate(
             log_file.write(json.dumps(record) + "\n")
             log_file.flush()
             print(f"Epoch {epoch + 1}: train_loss={avg_train:.4f}, val_loss={avg_val:.4f}")
+
+            # Save best checkpoint
+            if avg_val < best_val:
+                best_val = avg_val
+                best_epoch = epoch + 1
+                torch.save(model.state_dict(), best_path)
+                print(f"  → new best, saved to {best_path}")
+
             model.train()
 
-    torch.save(model.state_dict(), checkpoint_path)
-    print(f"Saved checkpoint to {checkpoint_path}")
-    return checkpoint_path
+    # Always save last
+    torch.save(model.state_dict(), last_path)
+    print(f"Saved last checkpoint to {last_path}")
+
+    with open(best_epoch_path, "w", encoding="utf-8") as f:
+        json.dump({"best_epoch": best_epoch, "best_val_loss": best_val}, f)
+    print(f"Best epoch: {best_epoch} (val_loss={best_val:.4f})")
+
+    return best_path
 
 
 def run_inference(
@@ -369,7 +388,13 @@ def main() -> None:
 
     if getattr(args, "eval", None):
         from src.evaluation.run_eval import run_full_evaluation
-        ckpt = Path(getattr(args, "eval_checkpoint", None) or checkpoint_path)
+        if getattr(args, "eval_checkpoint", None):
+            ckpt = Path(args.eval_checkpoint)
+        else:
+            best = run_dir / "checkpoints" / "model_best.pt"
+            last = run_dir / "checkpoints" / "model_last.pt"
+            ckpt = best if best.exists() else last
+        print(f"Loading checkpoint: {ckpt}")
         if not ckpt.exists():
             raise FileNotFoundError(f"Checkpoint not found for evaluation: {ckpt}")
         print("Running Phase 2 evaluation ...")
