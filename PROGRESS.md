@@ -181,6 +181,40 @@ price path, producing spurious results:
 - `tests/test_evaluation_stylized.py` — 2 new tests
 
 ### Impact
-- Full suite: 59 passed.
+- Full suite: 77 passed (59 prior + 18 baseline tests).
 - **Host action required:** re-run GPU evaluation after this commit
   (`--eval` flag) so the EVALUATION_REPORT.md reflects corrected drawdown numbers.
+
+## 2026-06-28 — Phase 3 Preparations
+
+### Baseline modules implemented (CPU-only)
+- `src/baselines/__init__.py` — package init
+- `src/baselines/historical_bootstrap.py` — i.i.d. bootstrap on training log returns
+- `src/baselines/block_bootstrap.py` — stationary (Politis-Romano) block bootstrap,
+  configurable block_length (default 10)
+- `src/baselines/garch_baseline.py` — GARCH(1,1) with Student-t or normal
+  innovations via the `arch` package
+
+All three produce samples in canonical space: `(n_samples, n_paths, horizon)`.
+
+### Tests added (18 tests)
+- `tests/test_baseline_historical.py` — 5 tests (shape, mean unbiased, out-of-sample guard, determinism, empty)
+- `tests/test_baseline_block.py` — 6 tests (shape, **ACF(|r|) preservation** vs i.i.d., block_length matters, determinism, empty guard, BL=0 guard)
+- `tests/test_baseline_garch.py` — 7 tests (shape, **unconditional-variance check**, t>normal kurtosis, not-fitted guard, wrong-rows guard, 1D history reshaped, invalid dist)
+
+### vanilla_timegrad investigation
+- `VanillaTimeGradPredictionNetwork` and `VanillaTimeGradTrainingNetwork` exist
+  at `src/predictor/prediction_network.py:338` and
+  `src/training/training_network.py:364` — fully implemented, never wired into `run.py`.
+- `checkpoints/original_timegrad_best.pt` exists but was trained on the leaky
+  pre-Phase-1 pipeline → **not suitable for honest baseline comparison**.
+- **Decision: Option B** — train vanilla from scratch on the clean causal
+  pipeline, same seed, comparable epochs. Vanilla is lighter (no conditioning)
+  so training should be faster than conditional.
+- Phase 3 execution plan documented in `docs/PHASE3_PLAN.md`.
+
+### Next session (host GPU required)
+1. Add `--model vanilla` flag + vanilla training/inference paths to `run.py`
+2. Train vanilla TimeGrad on clean pipeline: `python run.py --model vanilla --run-name vanilla_retrain --seed 0 --epochs 200`
+3. Implement `src/baselines/run_baselines.py` glue
+4. Run all 4 baselines + conditional model through canonical evaluation → `COMPARISON_TABLE.md`
