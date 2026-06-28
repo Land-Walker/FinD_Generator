@@ -2,3 +2,4 @@ __pycache__/
 .pytest_cache/
 runs/*
 !runs/_selfcheck/
+.venv/
