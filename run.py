@@ -60,6 +60,7 @@ CONFIG_KEYS = (
     "num_samples",
     "max_train_steps",
     "max_val_steps",
+    "max_test_steps",
     "download",
     "run_name",
     "seed",
@@ -312,6 +313,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-samples", type=int, default=None, help="forecast samples per series")
     parser.add_argument("--max-train-steps", type=int, default=None, help="optional cap for train steps per epoch")
     parser.add_argument("--max-val-steps", type=int, default=None, help="optional cap for val steps per epoch")
+    parser.add_argument("--max-test-steps", type=int, default=None, help="optional cap for test windows during eval")
     parser.add_argument(
         "--download",
         action="store_const",
@@ -379,9 +381,38 @@ def main() -> None:
 
     # Namespace view of the resolved config for the helper functions.
     args = argparse.Namespace(**{k: cfg[k] for k in CONFIG_KEYS})
+    # Forward CLI-only flags that aren't in CONFIG_KEYS
+    args.eval = bool(cli.eval)
+    args.eval_checkpoint = cli.eval_checkpoint
 
     dm = _prepare_datamodule(args, device)
     train_net, predictor = _build_networks(dm, args, device)
+
+    # ── eval-only mode: skip training / inference — load checkpoint directly ──
+    if getattr(args, "eval", None) and getattr(args, "eval_checkpoint", None):
+        from src.evaluation.run_eval import run_full_evaluation
+
+        ckpt = Path(args.eval_checkpoint)
+        if not ckpt.exists():
+            raise FileNotFoundError(f"Checkpoint not found for evaluation: {ckpt}")
+        print(f"Loading checkpoint: {ckpt}")
+        print("Running Phase 2 evaluation (eval-only, no training) ...")
+        result = run_full_evaluation(predictor, dm, run_dir, ckpt, device,
+                                     num_samples=args.num_samples,
+                                     sampling_strategy="full_horizon",
+                                     max_test_windows=args.max_test_steps)
+
+        # Print headline numbers
+        fm_res = result.get("forecast", {})
+        facts_res = result.get("stylized_facts", {})
+        gen_facts = facts_res.get("generated", {})
+        real_facts = facts_res.get("real_raw_un_denoised", {})
+        print("── Headline metrics ──")
+        print(f"  CRPS:          {fm_res.get('crps', float('nan')):.6f}")
+        print(f"  coverage_0.8:  {fm_res.get('coverage_0.8', float('nan')):.6f}")
+        print(f"  kurtosis real: {real_facts.get('kurtosis', float('nan')):.4f}")
+        print(f"  kurtosis gen:  {gen_facts.get('kurtosis', float('nan')):.4f}")
+        return
 
     checkpoint_path = train_and_validate(train_net, dm, args, device, run_dir)
     run_inference(predictor, dm, args, device, checkpoint_path, run_dir)
@@ -400,7 +431,8 @@ def main() -> None:
         print("Running Phase 2 evaluation ...")
         run_full_evaluation(predictor, dm, run_dir, ckpt, device,
                             num_samples=args.num_samples,
-                            sampling_strategy="full_horizon")
+                            sampling_strategy="full_horizon",
+                            max_test_windows=args.max_test_steps)
 
 
 if __name__ == "__main__":

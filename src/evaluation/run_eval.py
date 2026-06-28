@@ -65,6 +65,7 @@ def generate_test_samples(
     device: torch.device,
     num_samples: int,
     sampling_strategy: str = "full_horizon",
+    max_test_windows: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Generate unconditional samples on the full test split.
 
@@ -83,7 +84,7 @@ def generate_test_samples(
     samples_list, targets_list, static_list, xhist_list = [], [], [], []
 
     with torch.no_grad():
-        for batch in loader:
+        for step, batch in enumerate(loader):
             x_hist = batch["x_hist"].to(device)         # [B, L, C]
             x_future = batch["x_future"].to(device)     # [B, H, C]
             cond_dynamic = batch["cond_dynamic"].to(device)
@@ -101,6 +102,9 @@ def generate_test_samples(
             targets_list.append(_to_numpy(x_future))
             static_list.append(_to_numpy(cond_static))
             xhist_list.append(_to_numpy(x_hist))
+
+            if max_test_windows and (step + 1) >= max_test_windows:
+                break
 
     all_samples = np.concatenate([s.transpose(1, 0, 2, 3) for s in samples_list], axis=0)
     all_targets = np.concatenate(targets_list, axis=0)
@@ -247,6 +251,7 @@ def run_full_evaluation(
     device: torch.device,
     num_samples: int,
     sampling_strategy: str = "full_horizon",
+    max_test_windows: int = 0,
 ) -> Dict[str, Any]:
     """Orchestrate the full Phase 2 evaluation.
 
@@ -265,6 +270,7 @@ def run_full_evaluation(
     print("Generating unconditional test samples ...")
     samples, targets, cond_static, x_hist = generate_test_samples(
         predictor, dm, checkpoint_path, device, num_samples, sampling_strategy,
+        max_test_windows=max_test_windows,
     )
     print(f"  Samples shape: {samples.shape}")
 
@@ -292,22 +298,21 @@ def run_full_evaluation(
         print(f"  {name}: kurtosis={facts[name]['kurtosis']:.3f}, VaR95={facts[name]['var_95']:.4f}")
 
     # 5. Prepare cond_dynamic for regime sampling
-    # Build cond_dynamic from the test dataset (use first window's dynamic context)
-    test_set = dm.test_set
-    all_cond_dynamic = np.zeros((len(test_set), dm.seq_len, 0), dtype=np.float32)
-    # Actually, cond_dynamic is complex (daily + monthly).  We build it by
-    # extracting from the test dataloader — but we already have it from the
-    # generate step.  Re-collect it from the loader.
+    # Re-collect from the loader in a single pass
     dynamic_list = []
+    xhist_list = []
     loader = dm.test_dataloader()
     for batch in loader:
         dynamic_list.append(_to_numpy(batch["cond_dynamic"]))
+        xhist_list.append(_to_numpy(batch["x_hist"]))
     all_cond_dynamic = np.concatenate(dynamic_list, axis=0)
-    all_x_hist_arr = np.concatenate([_to_numpy(b["x_hist"]) for b in loader], axis=0)
+    all_x_hist_arr = np.concatenate(xhist_list, axis=0)
 
     # 6. Regime-conditional sampling (small subset for plumbing; full on host)
     print("Generating regime-conditional samples (subset for plumbing) ...")
     max_regime_windows = min(len(all_x_hist_arr), 32)
+    if max_test_windows:
+        max_regime_windows = min(max_regime_windows, max_test_windows * 64)
     samples_by_regime = generate_regime_conditional_samples(
         predictor, dm, device, num_samples,
         regime_cols,
@@ -381,7 +386,7 @@ def _write_evaluation_report(
         "",
         "## Canonical Evaluation Space",
         "- All methods evaluated in **denoised-close log returns**.",
-        f"- PCA {len(facts.get('real_denoised', {}).get('kurtosis', '?'))} components, reconstruction RMSE = {recon_rmse:.4f}, MAPE = {recon_mape:.2f}%.",
+        f"- PCA 1 components, reconstruction RMSE = {recon_rmse:.4f}, MAPE = {recon_mape:.2f}%.",
         "- `real_raw_un_denoised` = un-denoised log returns (honest kurtosis/tails reference).",
         "",
         "## Forecast Metrics",

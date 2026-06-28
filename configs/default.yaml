@@ -20,6 +20,7 @@ cond_attn_dropout: 0.1
 num_samples: 2          # forecast samples per series (prior default: 2)
 max_train_steps: 0      # 0 = no cap
 max_val_steps: 0        # 0 = no cap
+max_test_steps: 0       # 0 = no cap
 download: false         # download fresh data instead of local parquet
 
 # Run identity. seed has NO default on purpose (Phase 0.4: --seed is
