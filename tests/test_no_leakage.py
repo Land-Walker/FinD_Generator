@@ -234,7 +234,7 @@ def test_every_feature_is_causal(pipeline, sampled_timestamps):
             macro = "recession"
         else:
             macro = "expansion"
-        for reg in ["expansion", "high_inflation", "normal", "recession", "stagflation"]:
+        for reg in ["expansion", "high_inflation", "recession", "stagflation"]:
             check(t, f"macro_regime_{reg}", float(macro == reg), float(row[f"macro_regime_{reg}"]))
 
         # --- scaled / PCA features (train-fitted transforms on recomputed raw)

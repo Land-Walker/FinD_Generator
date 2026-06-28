@@ -300,6 +300,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Download fresh data instead of loading local parquet files",
     )
+    parser.add_argument(
+        "--eval",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Run Phase 2 evaluation after training/inference",
+    )
+    parser.add_argument("--eval-checkpoint", type=str, default=None, help="path to checkpoint for evaluation")
     return parser.parse_args()
 
 
@@ -358,6 +366,16 @@ def main() -> None:
 
     checkpoint_path = train_and_validate(train_net, dm, args, device, run_dir)
     run_inference(predictor, dm, args, device, checkpoint_path, run_dir)
+
+    if getattr(args, "eval", None):
+        from src.evaluation.run_eval import run_full_evaluation
+        ckpt = Path(getattr(args, "eval_checkpoint", None) or checkpoint_path)
+        if not ckpt.exists():
+            raise FileNotFoundError(f"Checkpoint not found for evaluation: {ckpt}")
+        print("Running Phase 2 evaluation ...")
+        run_full_evaluation(predictor, dm, run_dir, ckpt, device,
+                            num_samples=args.num_samples,
+                            sampling_strategy="full_horizon")
 
 
 if __name__ == "__main__":

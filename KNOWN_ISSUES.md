@@ -60,3 +60,10 @@ Fixed items name the fixing commit; open items await owner decision.
   so those months kept showing the PREVIOUS month's data (e.g. Feb-2015 rows
   carried December-2014 macro values). Discovered by tests/test_no_leakage.py.
 - Fix: `.reindex(daily_index, method="ffill")` — still past-only, no data loss.
+
+## 9. `stagflation` support is insufficient for regime_validation — OPEN
+- 42 rows (0.67% of 6305) — too few for conditional KS / roundtrip tests to
+  have meaningful statistical power. When EVALUATION_REPORT.md is generated,
+  stagflation comparisons MUST be marked "insufficient support — validation
+  underpowered," not reported as a clean pass/fail. A stylized/scenario-
+  override stress test can still exercise the condition at inference.

@@ -186,7 +186,7 @@ def align_and_handle_missing_values(
     # NO suffix here: the legacy '_quarterly' suffix renamed 'gdp' to
     # 'gdp_quarterly', so process_quarterly_macro_raw found none of its
     # expected columns and silently produced an EMPTY block — no gdp_qoq, and
-    # therefore degenerate all-'normal' macro regimes (see KNOWN_ISSUES.md).
+    # therefore degenerate all-'expansion' macro regimes (see KNOWN_ISSUES.md).
     quarterly_aligned = preprocess_df(quarterly_df, freq='MS')
 
     # Monthly -> keep original frequency, ffill past values
@@ -348,7 +348,12 @@ def label_macro_regimes(df: pd.DataFrame,
         gdp = df[gdp_col]
     else:
         gdp = None
-    df['macro_regime'] = 'normal'
+    # Initialize all rows; the four conditions below are collectively exhaustive
+    # over the (infl > high_infl, gdp < low_growth) 2D space, so every row is
+    # guaranteed to receive exactly one of expansion/recession/high_inflation/
+    # stagflation. "normal" was a dead initialiser — structurally unreachable
+    # when both infl and gdp are available (which they always are here).
+    df['macro_regime'] = 'expansion'
     if infl is not None and gdp is not None:
         cond_stag = (infl > high_infl) & (gdp < low_growth)
         cond_highinf = (infl > high_infl) & (gdp >= low_growth)
@@ -360,7 +365,7 @@ def label_macro_regimes(df: pd.DataFrame,
         df.loc[cond_expand, 'macro_regime'] = 'expansion'
 
     # Enforce consistent categories to ensure fixed input dimensions for the model
-    df['macro_regime'] = pd.Categorical(df['macro_regime'], categories=['expansion', 'high_inflation', 'normal', 'recession', 'stagflation'], ordered=False)
+    df['macro_regime'] = pd.Categorical(df['macro_regime'], categories=['expansion', 'high_inflation', 'recession', 'stagflation'], ordered=False)
 
     # one-hot encode
     df = pd.get_dummies(df, columns=['macro_regime'], prefix_sep='_')

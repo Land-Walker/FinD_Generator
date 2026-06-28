@@ -59,7 +59,7 @@ close at t and t-1); "no look-ahead" means no data dated **after** t.
 | 34 | `market_close` | market close, last trading day ≤ t | YES | test_no_leakage |
 | 35–37 | `market_regime_{bear,bull,sideways}` | roll_return/roll_vol over last 30 grid rows ≤ t + **train-only** median | YES | test_no_leakage (labels recomputed with frozen threshold); test_threshold_is_train_only |
 | 38–39 | `vol_regime_{high_vol,normal_vol}` | VIX at t vs fixed 20 | YES | test_no_leakage |
-| 40–44 | `macro_regime_{expansion,high_inflation,normal,recession,stagflation}` | cpi_yoy/gdp_qoq ≤ t vs fixed constants (high_infl=0.03, low_growth=0.0, W2.6) | YES | test_no_leakage; support on 2000–2024: expansion 67.6%, high_inflation 30.1%, recession 1.7%, stagflation 0.7%, normal 0.0% (D-③) |
+| 40–43 | `macro_regime_{expansion,high_inflation,recession,stagflation}` | cpi_yoy/gdp_qoq ≤ t vs fixed constants (high_infl=0.03, low_growth=0.0, W2.6). Four exhaustive labels; expansion (low-infl + positive-growth) is the de-facto baseline/reference regime for regime_validation stress comparisons. | YES | test_no_leakage; support on 2000–2024: expansion 67.6%, high_inflation 30.1%, recession 1.7%, stagflation 0.7% (D-③) |
 | 45 | `target_pca_1` | train-fitted scaler+PCA applied to features 1–4 at t | YES (transform fitted on train < t) | test_no_leakage |
 | 46–48 | `market_pca_1..3` | train-fitted scaler+PCA on features 6–9 at t | YES | test_no_leakage |
 | 49–50 | `daily_vix_daily_scaled`, `daily_yield_curve_daily_scaled` | train-fitted scaler on 11–12 at t | YES | test_no_leakage |
