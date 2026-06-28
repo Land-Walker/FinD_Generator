@@ -7,7 +7,7 @@ Fixed items name the fixing commit; open items await owner decision.
 - Repro (pre-fix): `align_and_handle_missing_values` suffixed quarterly columns
   (`gdp` → `gdp_quarterly`), then `process_quarterly_macro_raw` looked for
   `'gdp' in df.columns` → returned a 0-column frame. Consequences: no
-  `gdp_yoy`/`gov_fiscal_balance_to_gdp`/`quarterly_pca_*` features, and
+  `gdp_qoq`/`gov_fiscal_balance_to_gdp`/`quarterly_pca_*` features, and
   `label_macro_regimes` saw no gdp series → every row labeled `normal`.
 - Evidence: legacy `data/processed/*_processed.csv` contain no quarterly
   features and only `macro_regime_normal`.
@@ -21,28 +21,26 @@ Fixed items name the fixing commit; open items await owner decision.
   Past-only (no look-ahead), but incoherent. Columns renamed
   `target_volume_raw` / `market_volume_raw`; scaler now uses market volume.
 
-## 3. Raw data span contradicts config — OPEN (owner decision)
-- `data/raw/*.parquet` cover **1992-01 → 2019-12**, while `src/config.py`
-  declares `START_DATE=2000-01-01`, `END_DATE=2023-12-31` (and the README/
-  Roadmap reference 2000–2023 crash events). All current results, and the
-  existing checkpoints, are fitted on 1992–2019. Re-downloading would change
-  the dataset under every existing number. Decision needed: keep 1992–2019
-  (document everywhere) vs re-download 2000–2023 (invalidates checkpoints).
+## 3. Raw data span contradicts config — FIXED (D-②, D-③)
+- `data/raw/*.parquet` have been re-downloaded for **2000-01 → 2024-12**,
+  matching `src/config.py` START_DATE/END_DATE. All six parquets verified.
+  Existing checkpoints invalidated (KNOW_ISSUES #6 remains).
 
-## 4. `gdp_yoy` is mislabeled and mostly zero — OPEN
-- `process_quarterly_macro_raw` computes `log_growth` (1-step log diff) on a
+## 4. `gdp_yoy` is mislabeled and mostly zero — FIXED (D-③, pending push)
+- `process_quarterly_macro_raw` computed `log_growth` (1-step log diff) on a
   quarterly series that was already forward-filled to monthly frequency, so
-  the value is 0 for ~2 of every 3 months and a QoQ (not YoY) growth at
-  quarter boundaries. With `low_growth=0.0`, "recession" labels fire only in
-  boundary months of shrinking quarters (233 of 7239 rows). Renaming/
-  redesigning would change the modeling problem; deferred to owner.
+  the value was 0 for ~2 of every 3 months and a QoQ (not YoY) growth at
+  quarter boundaries. Renamed `gdp_yoy` → `gdp_qoq` to reflect actual semantics.
+  The QoQ-negative recession logic is correct and unchanged.
 
-## 5. `high_infl=0.03` never triggers on monthly CPI — OPEN
+## 5. `high_infl=0.03` never triggers on monthly CPI — FIXED (D-③, pending push)
 - `cpi_mom` (month-over-month) never exceeds 3% in 1992–2019, so
-  `high_inflation` and `stagflation` regimes have ZERO support in the data
-  (constants are frozen by W2.6). Phase 2's macro-regime conditioning
-  validation will necessarily report this; scenario overrides can still force
-  these one-hots at inference, but the model never saw them in training.
+  `high_inflation` and `stagflation` regimes had ZERO support in the old data.
+- Fixed by switching the macro-regime inflation test from `cpi_mom` to
+  `cpi_yoy` (trailing-12-month CPI). On the extended 2000–2024 data, this
+  now fires during the 2021–22 inflation spike:
+  high_inflation=30.06%, stagflation=0.67% of 6305 merged rows.
+  Constants remain frozen (high_infl=0.03, low_growth=0.0 per W2.6).
 
 ## 6. Existing checkpoints are incompatible with the fixed pipeline — OPEN
 - `checkpoints/*_best.pt` were trained on the legacy feature layout

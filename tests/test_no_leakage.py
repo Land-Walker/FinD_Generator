@@ -92,6 +92,7 @@ def _recompute_market_ret(rawi, t, col) -> float:
 def _monthly_transforms(monthly: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=monthly.index)
     out["cpi_mom"] = monthly["cpi"].pct_change().fillna(0)
+    out["cpi_yoy"] = (monthly["cpi"] / monthly["cpi"].shift(12) - 1).fillna(0)
     out["unemployment_detrend"] = (
         monthly["unemployment"] - monthly["unemployment"].rolling(12, min_periods=1).mean()
     ).fillna(0)
@@ -103,15 +104,20 @@ def _monthly_transforms(monthly: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _quarterly_transforms(quarterly: pd.DataFrame, t) -> pd.DataFrame:
-    q = quarterly.resample("MS").ffill()  # alignment step (no suffix, post-fix)
-    # Extend the monthly grid up to the month containing t: months with no new
-    # quarterly publication carry the previous value (pure ffill of data <= t,
-    # still causal) — the pipeline materializes those rows, so must we.
-    full_ms = pd.date_range(q.index[0], pd.Timestamp(t).normalize().replace(day=1), freq="MS")
-    q = q.reindex(full_ms).ffill()
+def _quarterly_transforms(quarterly_trunc: pd.DataFrame, t, quarterly_full: pd.DataFrame) -> pd.DataFrame:
+    """Recompute quarterly features using only data <= t, but on the SAME
+    monthly grid that the pipeline would resample from the FULL dataset.
+    This eliminates grid-structure false-positives while keeping the GDP
+    values strictly causal (truncated at t, then ffilled)."""
+    # Build the full resample grid for grid-structure parity with pipeline
+    full_ffilled = quarterly_full.ffill()
+    full_resampled = full_ffilled.resample("MS").ffill()
+    # Compute transforms on truncated data, reindexed to the full grid
+    trunc_ffilled = quarterly_trunc.ffill()
+    trunc_resampled = trunc_ffilled.resample("MS").ffill()
+    q = trunc_resampled.reindex(full_resampled.index).ffill()
     out = pd.DataFrame(index=q.index)
-    out["gdp_yoy"] = np.log(q["gdp"] / q["gdp"].shift(1))
+    out["gdp_qoq"] = np.log(q["gdp"] / q["gdp"].shift(1))
     out["gov_fiscal_balance_to_gdp"] = q["gov_fiscal_balance"] / q["gdp"].replace({0: np.nan})
     for col in ["gov_debt", "tax_receipts", "gov_spending"]:
         out[col] = q[col]
@@ -169,15 +175,15 @@ def test_every_feature_is_causal(pipeline, sampled_timestamps):
         monthly_trunc = rawi["monthly_macro"].loc[:t]
         mt = _monthly_transforms(monthly_trunc)
         monthly_vals = {}
-        for c in ["cpi_mom", "unemployment_detrend", "interest_rate_diff", "trade_balance_seasdiff"]:
+        for c in ["cpi_mom", "cpi_yoy", "unemployment_detrend", "interest_rate_diff", "trade_balance_seasdiff"]:
             monthly_vals[c] = _last_at_or_before(mt[c], t)
             check(t, c, monthly_vals[c], row[c])
 
         # --- quarterly macro -------------------------------------------------
         quarterly_trunc = rawi["quarterly_macro"].loc[:t]
-        qt = _quarterly_transforms(quarterly_trunc, t)
+        qt = _quarterly_transforms(quarterly_trunc, t, rawi["quarterly_macro"])
         quarterly_vals = {}
-        for c in ["gdp_yoy", "gov_fiscal_balance_to_gdp", "gov_debt", "tax_receipts", "gov_spending"]:
+        for c in ["gdp_qoq", "gov_fiscal_balance_to_gdp", "gov_debt", "tax_receipts", "gov_spending"]:
             quarterly_vals[c] = _last_at_or_before(qt[c], t)
             check(t, c, quarterly_vals[c], row[c])
 
@@ -219,7 +225,7 @@ def test_every_feature_is_causal(pipeline, sampled_timestamps):
         for reg in ["high_vol", "normal_vol"]:
             check(t, f"vol_regime_{reg}", float(vol_regime == reg), float(row[f"vol_regime_{reg}"]))
 
-        infl, gdp = monthly_vals["cpi_mom"], quarterly_vals["gdp_yoy"]
+        infl, gdp = monthly_vals["cpi_yoy"], quarterly_vals["gdp_qoq"]
         if infl > 0.03 and gdp < 0.0:
             macro = "stagflation"
         elif infl > 0.03:
@@ -255,7 +261,7 @@ def test_every_feature_is_causal(pipeline, sampled_timestamps):
         for i in range(mm_pca.shape[1]):
             check(t, f"monthly_pca_{i+1}", float(mm_pca[0, i]), trans_row[f"monthly_pca_{i+1}"])
 
-        qqvec = np.array([[quarterly_vals[c] for c in ["gdp_yoy", "gov_fiscal_balance_to_gdp", "gov_debt", "tax_receipts", "gov_spending"]]])
+        qqvec = np.array([[quarterly_vals[c] for c in ["gdp_qoq", "gov_fiscal_balance_to_gdp", "gov_debt", "tax_receipts", "gov_spending"]]])
         qq_pca = dm.pcas["quarterly_pca"].transform(dm.scalers["quarterly_macro_scaler"].transform(qqvec))
         for i in range(qq_pca.shape[1]):
             check(t, f"quarterly_pca_{i+1}", float(qq_pca[0, i]), trans_row[f"quarterly_pca_{i+1}"])

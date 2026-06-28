@@ -167,6 +167,11 @@ def align_and_handle_missing_values(
         elif not isinstance(df_copy.index, pd.DatetimeIndex):
              raise ValueError(f"DataFrame must have '{date_col}' column or DatetimeIndex")
 
+        # Forward-fill NaN gaps within source data (past-only, safe).
+        # Critical for series like FYFSD (gov_fiscal_balance) that publish
+        # only at fiscal year-end; without this ffill, the first ~9 months
+        # of the calendar range have no prior value to carry.
+        df_copy = df_copy.ffill()
 
         # Resample structurally without computing any statistics across the whole series
         if freq is not None:
@@ -180,7 +185,7 @@ def align_and_handle_missing_values(
     # Quarterly -> monthly frequency, ffill past values only.
     # NO suffix here: the legacy '_quarterly' suffix renamed 'gdp' to
     # 'gdp_quarterly', so process_quarterly_macro_raw found none of its
-    # expected columns and silently produced an EMPTY block — no gdp_yoy, and
+    # expected columns and silently produced an EMPTY block — no gdp_qoq, and
     # therefore degenerate all-'normal' macro regimes (see KNOWN_ISSUES.md).
     quarterly_aligned = preprocess_df(quarterly_df, freq='MS')
 
@@ -244,6 +249,7 @@ def process_monthly_macro_raw(monthly_macro_df: pd.DataFrame) -> pd.DataFrame:
     # CPI -> month-on-month (or pct change)
     if 'cpi' in df.columns:
         out['cpi_mom'] = df['cpi'].pct_change().fillna(0)
+        out['cpi_yoy'] = (df['cpi'] / df['cpi'].shift(12) - 1).fillna(0)
     # unemployment detrend (rolling 12 mean subtract)
     if 'unemployment' in df.columns:
         out['unemployment_detrend'] = (df['unemployment'] - df['unemployment'].rolling(12, min_periods=1).mean()).fillna(0)
@@ -257,11 +263,11 @@ def process_monthly_macro_raw(monthly_macro_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def process_quarterly_macro_raw(quarterly_macro_df: pd.DataFrame) -> pd.DataFrame:
-    """Quarterly transforms: gdp log-growth, gov fiscal balance ratio-to-gdp, keep other series as-is for scaling later."""
+    """Quarterly transforms: gdp QoQ log-growth (quarter-over-quarter), gov fiscal balance ratio-to-gdp, keep other series as-is for scaling later."""
     df = quarterly_macro_df.copy() # .set_index('Date') - Removed: Assuming Date is already index
     out = pd.DataFrame(index=df.index)
     if 'gdp' in df.columns:
-        out['gdp_yoy'] = log_growth(df['gdp'])
+        out['gdp_qoq'] = log_growth(df['gdp'])
     # gov_fiscal_balance as ratio to (real) gdp (avoid division by zero)
     if 'gov_fiscal_balance' in df.columns and 'gdp' in df.columns:
         out['gov_fiscal_balance_to_gdp'] = df['gov_fiscal_balance'] / df['gdp'].replace({0: np.nan})
@@ -325,8 +331,8 @@ def label_market_regimes(df: pd.DataFrame,
 
 
 def label_macro_regimes(df: pd.DataFrame,
-                        infl_col: str = "cpi_mom",
-                        gdp_col: str = "gdp_yoy",
+                         infl_col: str = "cpi_yoy",
+                         gdp_col: str = "gdp_qoq",
                         rolling_window: int = 12,
                         high_infl: float = 0.03,
                         low_growth: float = 0.0) -> pd.DataFrame:
@@ -616,7 +622,7 @@ class TimeGradDataModule:
         labeled = label_market_regimes(
             merged, vol_median=vol_median, price_col='market_close', vol_col='vix_daily'
         )
-        labeled = label_macro_regimes(labeled, infl_col='cpi_mom', gdp_col='gdp_yoy')
+        labeled = label_macro_regimes(labeled, infl_col='cpi_yoy', gdp_col='gdp_qoq')
         # drop intermediate helper cols (roll stats are backward-looking but
         # redundant with the labels; keep parity with the legacy feature set)
         for c in ['roll_return','roll_vol','infl_yoy','gdp_growth_yoy']:
@@ -691,7 +697,7 @@ class TimeGradDataModule:
         if monthly_macro_cols is None:
             monthly_macro_cols = [c for c in df_all.columns if c in ['cpi_mom','unemployment_detrend','interest_rate_diff','trade_balance_seasdiff']]
         if quarterly_macro_cols is None:
-            quarterly_macro_cols = [c for c in df_all.columns if c in ['gdp_yoy','gov_debt','gov_fiscal_balance_to_gdp','tax_receipts','gov_spending']]
+            quarterly_macro_cols = [c for c in df_all.columns if c in ['gdp_qoq','gov_debt','gov_fiscal_balance_to_gdp','tax_receipts','gov_spending']]
 
         # ---- Fit scalers on train (use to_numpy() to guarantee 2D) ----
         # target scaler + PCA

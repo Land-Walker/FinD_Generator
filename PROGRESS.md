@@ -110,7 +110,7 @@ FinD_Generator is a regime-conditional stress scenario generator. Headline resul
 ### Owner decisions needed before Phase 2 (W3.4 approval gate)
 1. **Checkpoint strategy** (KNOWN_ISSUES #6): (a) evaluate existing checkpoints on the preserved LEGACY frames (`data/processed/*_processed.csv`, horizon 24) as the spec's Phase 2 acceptance assumes, and run the post-fix pipeline only for newly trained models later; or (b) approve retraining conditional+vanilla models on the repaired pipeline now (CPU-only: feasibility estimate required first, W0.4).
 2. **Data span** (KNOWN_ISSUES #3): keep 1992–2019 (document) or re-download 2000–2023 (invalidates all existing artifacts).
-3. Acknowledge #4/#5 (gdp_yoy semantics, unreachable inflation regimes) as documented limitations, or schedule a redesign (changes the modeling problem).
+3. Acknowledge #4/#5 (gdp_qoq semantics — now resolved via D-③ rename; unreachable inflation regimes — scheduled to be fixed via cpi_yoy) as documented limitations, or schedule a redesign (changes the modeling problem).
 
 No BLOCKED.md: nothing ambiguous remains inside Phase 1 itself; the items above are the natural gate decisions. **Stopped per W3.3 — Phase 2 will not begin until explicit owner approval.**
 
