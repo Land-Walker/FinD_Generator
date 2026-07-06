@@ -10,8 +10,9 @@ to execute on the host GPU machine.
 
 ## Prerequisites
 - GPU host with CUDA available
-- D-① retrain completed: `python run.py --config configs/default.yaml --seed 0 --run-name retrain_d1`
-- Checkpoints saved to `runs/retrain_d1/checkpoints/`
+- D-① retrain completed (100 epochs, same budget as vanilla for comparison):
+  `python run.py --config configs/default.yaml --seed 0 --run-name retrain_d1 --epochs 100`
+- Checkpoints saved to `runs/retrain_d1_*/checkpoints/model_best.pt`
 - `--model vanilla` flag exists (added Phase 3 STEP 1)
 - `src/baselines/run_baselines.py` exists (added Phase 3 STEP 2)
 
@@ -19,7 +20,7 @@ to execute on the host GPU machine.
 
 ## Exact Host Command Sequence
 
-### 1. Re-run conditional --eval on the D-① checkpoint
+### 1. Re-run conditional --eval on the D-① checkpoint (includes drawdown fix)
 ```bash
 python run.py --config configs/default.yaml --seed 0 \
   --run-name retrain_d1 --eval \
@@ -27,18 +28,25 @@ python run.py --config configs/default.yaml --seed 0 \
   --num-samples 200 --max-test-steps 0
 ```
 This regenerates forecast_metrics.json, stylized_facts.json, regime_validation.json,
-and EVALUATION_REPORT.md for the conditional model.
+and EVALUATION_REPORT.md (with per-path drawdown fix) for the conditional model.
 
-### 2. Train vanilla TimeGrad from scratch (same budget as conditional)
+### 2. Train vanilla TimeGrad from scratch
 ```bash
 python run.py --config configs/default.yaml --seed 0 \
   --run-name vanilla_retrain --model vanilla \
-  --epochs 100 --num-samples 200
+  --epochs 100
 ```
-Trains VanillaTimeGradTrainingNetwork on the same clean causal pipeline,
-same seed 0, same data. Must match the conditional training budget in epochs.
+```bash
+# ── SAME BUDGET, SAME SEED as conditional ──
+python run.py --config configs/default.yaml --seed 0 \
+  --run-name retrain_d1 \
+  --epochs 100
+```
+Both use: context_length=64, prediction_length=5, diff_steps=100, beta_schedule=linear,
+residual_layers=6, residual_channels=32, lr=1e-3, batch_size=64.
+Only difference: `--model vanilla` vs default `conditional`.
 
-### 3. Eval vanilla + generate samples
+### 3. Eval vanilla (load best checkpoint, generate samples + metrics)
 ```bash
 python run.py --config configs/default.yaml --seed 0 \
   --run-name vanilla_eval --model vanilla --eval \
@@ -47,13 +55,14 @@ python run.py --config configs/default.yaml --seed 0 \
 ```
 Produces forecast_metrics.json, stylized_facts.json, EVALUATION_REPORT.md for vanilla.
 
-### 4. Run CPU baselines on the D-① test split
+### 4. Run CPU baselines at full N (200 ensemble members)
 ```bash
 python -m src.baselines.run_baselines --run-id retrain_d1 \
   --data-config configs/default.yaml --seed 0 --num-samples 200
 ```
 Produces runs/retrain_d1/metrics/baseline_hist_boot.json,
-baseline_block_boot.json, baseline_garch_t.json, and COMPARISON_TABLE.md.
+baseline_block_boot.json, baseline_garch_t.json, and auto-generates
+COMPARISON_TABLE.md.
 
 ### 5. Assemble final COMPARISON_TABLE.md (if not auto-generated)
 ```bash
@@ -72,7 +81,11 @@ conditional, vanilla, hist_boot, block_boot, garch_t, real (test).
 ---
 
 ## Notes
-- `--num-samples 200` gives statistical stability; use the same N for all methods.
+- `--num-samples 200` for all eval/inference (not training). 10 is for plumbing only;
+  200 gives stable coverage and CRPS estimates.
+- Regime-conditional sampling (inside `--eval`) is the **single slowest operation**
+  — it generates samples for each regime label × each test window. Use `--max-test-steps`
+  to cap if needed, then remove the cap for the final run.
 - All metrics are in denoised-close log returns (canonical space).
 - Vanilla has no regime validation (unconditional model) — the comparison table
   omits regime columns for vanilla and baselines.
