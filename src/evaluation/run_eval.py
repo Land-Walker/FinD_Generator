@@ -18,6 +18,7 @@ objects, config, and data.  The `--eval` flag in run.py wires them together.
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from pathlib import Path
@@ -66,6 +67,7 @@ def generate_test_samples(
     num_samples: int,
     sampling_strategy: str = "full_horizon",
     max_test_windows: int = 0,
+    model_type: str = "conditional",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Generate unconditional samples on the full test split.
 
@@ -80,6 +82,7 @@ def generate_test_samples(
     predictor.load_state_dict(state, strict=False)
     predictor.eval()
 
+    is_vanilla = model_type == "vanilla"
     loader = dm.test_dataloader()
     samples_list, targets_list, static_list, xhist_list = [], [], [], []
 
@@ -87,20 +90,27 @@ def generate_test_samples(
         for step, batch in enumerate(loader):
             x_hist = batch["x_hist"].to(device)         # [B, L, C]
             x_future = batch["x_future"].to(device)     # [B, H, C]
-            cond_dynamic = batch["cond_dynamic"].to(device)
-            cond_static = batch["cond_static"].to(device)
 
-            samples = predictor.sample_autoregressive(
-                x_hist=x_hist,
-                cond_dynamic=cond_dynamic,
-                cond_static=cond_static,
-                num_samples=num_samples,
-                sampling_strategy=sampling_strategy,
-            )  # [num_samples, B, H, C]
+            if is_vanilla:
+                samples = predictor.sample_forecast(
+                    x_hist=x_hist,
+                    num_samples=num_samples,
+                )
+                static_list.append(np.zeros((x_future.shape[0], 1), dtype=np.float32))
+            else:
+                cond_dynamic = batch["cond_dynamic"].to(device)
+                cond_static = batch["cond_static"].to(device)
+                samples = predictor.sample_autoregressive(
+                    x_hist=x_hist,
+                    cond_dynamic=cond_dynamic,
+                    cond_static=cond_static,
+                    num_samples=num_samples,
+                    sampling_strategy=sampling_strategy,
+                )
+                static_list.append(_to_numpy(cond_static))
 
             samples_list.append(_to_numpy(samples))
             targets_list.append(_to_numpy(x_future))
-            static_list.append(_to_numpy(cond_static))
             xhist_list.append(_to_numpy(x_hist))
 
             if max_test_windows and (step + 1) >= max_test_windows:
@@ -261,6 +271,7 @@ def run_full_evaluation(
     num_samples: int,
     sampling_strategy: str = "full_horizon",
     max_test_windows: int = 0,
+    model_type: str = "conditional",
 ) -> Dict[str, Any]:
     """Orchestrate the full Phase 2 evaluation.
 
@@ -272,14 +283,13 @@ def run_full_evaluation(
     if scaler is None or pca is None:
         raise RuntimeError("Target scaler/PCA not fitted. Run pipeline first.")
 
-    feature_cols = dm.get_feature_columns_by_type()
-    regime_cols = feature_cols["regime"]
+    is_vanilla = model_type == "vanilla"
 
     # 1. Generate unconditional samples
     print("Generating unconditional test samples ...")
     samples, targets, cond_static, x_hist = generate_test_samples(
         predictor, dm, checkpoint_path, device, num_samples, sampling_strategy,
-        max_test_windows=max_test_windows,
+        max_test_windows=max_test_windows, model_type=model_type,
     )
     print(f"  Samples shape: {samples.shape}")
 
@@ -306,58 +316,59 @@ def run_full_evaluation(
     for name in facts:
         print(f"  {name}: kurtosis={facts[name]['kurtosis']:.3f}, VaR95={facts[name]['var_95']:.4f}")
 
-    # 5. Prepare cond_dynamic for regime sampling
-    # Re-collect from the loader in a single pass
-    dynamic_list = []
-    xhist_list = []
-    loader = dm.test_dataloader()
-    for batch in loader:
-        dynamic_list.append(_to_numpy(batch["cond_dynamic"]))
-        xhist_list.append(_to_numpy(batch["x_hist"]))
-    all_cond_dynamic = np.concatenate(dynamic_list, axis=0)
-    all_x_hist_arr = np.concatenate(xhist_list, axis=0)
+    # 5. Regime validation (conditional only)
+    regime_val: Dict[str, Any] = {}
+    if not is_vanilla:
+        feature_cols = dm.get_feature_columns_by_type()
+        regime_cols = feature_cols["regime"]
 
-    # 6. Regime-conditional sampling (small subset for plumbing; full on host)
-    print("Generating regime-conditional samples (subset for plumbing) ...")
-    max_regime_windows = min(len(all_x_hist_arr), 32)
-    if max_test_windows:
-        max_regime_windows = min(max_regime_windows, max_test_windows * 64)
-    samples_by_regime = generate_regime_conditional_samples(
-        predictor, dm, device, num_samples,
-        regime_cols,
-        all_x_hist_arr[:max_regime_windows],
-        all_cond_dynamic[:max_regime_windows],
-        sampling_strategy,
-    )
-    # Convert each regime label's samples to canonical space
-    regime_results = {}
-    for dim, labels in samples_by_regime.items():
-        dim_canon = {}
-        for label, s in labels.items():
-            s_canon = target_pca_to_log_returns(s, pca, scaler)
-            # Reshape: [n_batch, n_samples, horizon] → [n_batch * n_samples, horizon]
-            s_2d = s_canon.reshape(-1, s_canon.shape[-1]) if s_canon.ndim > 2 else s_canon
-            dim_canon[label] = s_2d
-        regime_results[dim] = dim_canon
+        dynamic_list = []
+        xhist_list = []
+        loader = dm.test_dataloader()
+        for batch in loader:
+            dynamic_list.append(_to_numpy(batch["cond_dynamic"]))
+            xhist_list.append(_to_numpy(batch["x_hist"]))
+        all_cond_dynamic = np.concatenate(dynamic_list, axis=0)
+        all_x_hist_arr = np.concatenate(xhist_list, axis=0)
 
-    # Run regime validation
-    regime_val = rv.regime_validation_report(regime_results, list(regime_results.keys()))
-    for dim, dim_res in regime_val.items():
-        for label, res in dim_res.items():
-            if 'warning' in res:
-                print(f"  {dim}/{label}: {res['warning']}")
-            else:
-                print(f"  {dim}/{label}: KS p={res['ks_pvalue']:.4f}, d={res['cohens_d']:.3f}")
+        print("Generating regime-conditional samples (subset for plumbing) ...")
+        max_regime_windows = min(len(all_x_hist_arr), 32)
+        if max_test_windows:
+            max_regime_windows = min(max_regime_windows, max_test_windows * 64)
+        samples_by_regime = generate_regime_conditional_samples(
+            predictor, dm, device, num_samples,
+            regime_cols,
+            all_x_hist_arr[:max_regime_windows],
+            all_cond_dynamic[:max_regime_windows],
+            sampling_strategy,
+        )
+        regime_results = {}
+        for dim, labels in samples_by_regime.items():
+            dim_canon = {}
+            for label, s in labels.items():
+                s_canon = target_pca_to_log_returns(s, pca, scaler)
+                s_2d = s_canon.reshape(-1, s_canon.shape[-1]) if s_canon.ndim > 2 else s_canon
+                dim_canon[label] = s_2d
+            regime_results[dim] = dim_canon
 
-    # 7. Save metrics JSON
+        regime_val = rv.regime_validation_report(regime_results, list(regime_results.keys()))
+        for dim, dim_res in regime_val.items():
+            for label, res in dim_res.items():
+                if 'warning' in res:
+                    print(f"  {dim}/{label}: {res['warning']}")
+                else:
+                    print(f"  {dim}/{label}: KS p={res['ks_pvalue']:.4f}, d={res['cohens_d']:.3f}")
+
+    # 6. Save metrics JSON
     metrics_dir = run_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     with open(metrics_dir / "forecast_metrics.json", "w") as f:
         json.dump(forecast_results, f, indent=2)
     with open(metrics_dir / "stylized_facts.json", "w") as f:
         json.dump(facts, f, indent=2)
-    with open(metrics_dir / "regime_validation.json", "w") as f:
-        json.dump(regime_val, f, indent=2)
+    if not is_vanilla:
+        with open(metrics_dir / "regime_validation.json", "w") as f:
+            json.dump(regime_val, f, indent=2)
     with open(metrics_dir / "reconstruction_error.json", "w") as f:
         json.dump({
             "rmse": recon_rmse,
@@ -366,8 +377,10 @@ def run_full_evaluation(
             "pca_variance_retained": float(np.sum(pca.explained_variance_ratio_)),
         }, f, indent=2)
 
-    # 8. Assemble EVALUATION_REPORT.md
-    _write_evaluation_report(run_dir, forecast_results, facts, regime_val, recon_rmse, recon_mape)
+    # 7. Assemble EVALUATION_REPORT.md + comparison table
+    _write_evaluation_report(run_dir, forecast_results, facts, regime_val, recon_rmse, recon_mape,
+                             model_type=model_type)
+    write_comparison_table(run_dir)
 
     elapsed = time.time() - t0
     print(f"Evaluation complete in {elapsed:.1f}s. Report: {run_dir}/EVALUATION_REPORT.md")
@@ -388,10 +401,13 @@ def _write_evaluation_report(
     regime_val: Dict,
     recon_rmse: float,
     recon_mape: float,
+    model_type: str = "conditional",
 ) -> None:
     report = run_dir / "EVALUATION_REPORT.md"
     lines = [
         "# EVALUATION_REPORT — Phase 2",
+        "",
+        f"## Model: {model_type}",
         "",
         "## Canonical Evaluation Space",
         "- All methods evaluated in **denoised-close log returns**.",
@@ -427,24 +443,25 @@ def _write_evaluation_report(
             return str(v)
         lines.append(f"| {key} | {fmt(raw_v)} | {fmt(den_v)} | {fmt(gen_v)} |")
 
-    lines += [
-        "",
-        "## Regime Validation",
-        "",
-        "| Dimension | Label | KS p-value | Cohen's d | Energy Dist | N (g/¬g) |",
-        "|-----------|-------|-----------|-----------|-------------|-----------|",
-    ]
-    for dim, dim_res in regime_val.items():
-        for label, res in dim_res.items():
-            if 'warning' in res:
-                lines.append(f"| {dim} | {label} | — | — | — | {res.get('n_g','?')}/{res.get('n_not_g','?')} ⚠ {res['warning']} |")
-            else:
-                ks = res.get('ks_pvalue', float('nan'))
-                d = res.get('cohens_d', float('nan'))
-                ed = res.get('energy_dist', float('nan'))
-                ng = res.get('n_g', '?')
-                nng = res.get('n_not_g', '?')
-                lines.append(f"| {dim} | {label} | {ks:.4f} | {d:.3f} | {ed:.4f} | {ng}/{nng} |")
+    if regime_val:
+        lines += [
+            "",
+            "## Regime Validation",
+            "",
+            "| Dimension | Label | KS p-value | Cohen's d | Energy Dist | N (g/¬g) |",
+            "|-----------|-------|-----------|-----------|-------------|-----------|",
+        ]
+        for dim, dim_res in regime_val.items():
+            for label, res in dim_res.items():
+                if 'warning' in res:
+                    lines.append(f"| {dim} | {label} | — | — | — | {res.get('n_g','?')}/{res.get('n_not_g','?')} ⚠ {res['warning']} |")
+                else:
+                    ks = res.get('ks_pvalue', float('nan'))
+                    d = res.get('cohens_d', float('nan'))
+                    ed = res.get('energy_dist', float('nan'))
+                    ng = res.get('n_g', '?')
+                    nng = res.get('n_not_g', '?')
+                    lines.append(f"| {dim} | {label} | {ks:.4f} | {d:.3f} | {ed:.4f} | {ng}/{nng} |")
 
     lines += [
         "",
@@ -453,8 +470,129 @@ def _write_evaluation_report(
         "- stagflation (42 rows, 0.67%) is underpowered — see KNOWN_ISSUES #9.",
         "- **Drawdown semantics:** real (raw/denoised) returns are a single continuous test-period price path → continuous drawdown. Generated returns are independent per-path drawdowns (one per (sample, window) horizon), aggregated: `max_drawdown` = worst across paths, `mean_drawdown` = mean, `max_drawdown_duration` = longest. This is correct for short-horizon forecasts — a 5-step path cannot be compared to a multi-year drawdown on a single concatenated series.",
         "- Baseline columns (hist_bootstrap, block_bootstrap, garch_t, vanilla_timegrad) are TODO — Phase 3.",
-        "- Full regime-conditional evaluation on all test windows requires GPU (HOST_TASKS.md).",
+        "- Full regime-conditional evaluation on all test windows requires GPU (HOST_TASKS.md)." if model_type == "conditional" else "- Regime validation skipped (vanilla model has no conditioning).",
     ]
 
-    report.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  Wrote {report}")
+def write_comparison_table(run_dir: Path) -> Path:
+    """Assemble COMPARISON_TABLE.md from available metrics JSONs.
+
+    Reads forecast_metrics.json for conditional/vanilla (when present) and
+    baseline_*.json for the 3 CPU baselines. Rows whose JSONs are missing
+    show a placeholder.
+    """
+    metrics_dir = run_dir / "metrics"
+    out_path = run_dir / "COMPARISON_TABLE.md"
+
+    def _load_metrics(name: str) -> Dict:
+        path = metrics_dir / name
+        if path.exists():
+            with open(path) as f:
+                return json.load(f)
+        return {}
+
+    cond_fm = _load_metrics("forecast_metrics.json")
+    cond_sf = _load_metrics("stylized_facts.json")
+    cond_sf_gen = cond_sf.get("generated", {}) if cond_sf else {}
+    cond_sf_real = cond_sf.get("real_raw_un_denoised", {}) if cond_sf else {}
+
+    methods = [
+        ("conditional", None, cond_fm, cond_sf_gen),
+        ("vanilla", "vanilla_", None, None),
+        ("hist_boot", "baseline_hist_boot", None, None),
+        ("block_boot", "baseline_block_boot", None, None),
+        ("garch_t", "baseline_garch_t", None, None),
+    ]
+
+    rows_data = []
+    for label, json_prefix, fm_data, sf_data in methods:
+        if json_prefix:
+            raw = _load_metrics(f"{json_prefix}.json")
+            fm_data = raw.get("forecast", {})
+            sf_data = raw.get("stylized_facts", {})
+        if fm_data and sf_data:
+            rows_data.append({
+                "Method": label,
+                "CRPS": fm_data.get("crps"),
+                "coverage_0.8": fm_data.get("coverage_0.8"),
+                "PIT_KS_p": fm_data.get("pit_ks_pvalue"),
+                "kurtosis": sf_data.get("kurtosis"),
+                "skewness": sf_data.get("skewness"),
+                "|r|_ACF1": sf_data.get("acf_abs_returns_lag1"),
+                "leverage_lag1": sf_data.get("leverage_lag1"),
+                "VaR_99": sf_data.get("var_99"),
+                "ES_99": sf_data.get("es_99"),
+                "Hill_idx": sf_data.get("tail_index_hill"),
+            })
+        else:
+            rows_data.append({
+                "Method": label,
+                "CRPS": None, "coverage_0.8": None, "PIT_KS_p": None,
+                "kurtosis": None, "skewness": None, "|r|_ACF1": None,
+                "leverage_lag1": None, "VaR_99": None, "ES_99": None,
+                "Hill_idx": None,
+            })
+
+    # Real reference row
+    rows_data.append({
+        "Method": "**real (test)**",
+        "CRPS": None, "coverage_0.8": None, "PIT_KS_p": None,
+        "kurtosis": cond_sf_real.get("kurtosis"),
+        "skewness": cond_sf_real.get("skewness"),
+        "|r|_ACF1": cond_sf_real.get("acf_abs_returns_lag1"),
+        "leverage_lag1": cond_sf_real.get("leverage_lag1"),
+        "VaR_99": cond_sf_real.get("var_99"),
+        "ES_99": cond_sf_real.get("es_99"),
+        "Hill_idx": cond_sf_real.get("tail_index_hill"),
+    })
+
+    COL_ORDER = [
+        "Method", "CRPS", "coverage_0.8", "PIT_KS_p",
+        "kurtosis", "skewness", "|r|_ACF1", "leverage_lag1",
+        "VaR_99", "ES_99", "Hill_idx",
+    ]
+
+    lines = [
+        "# COMPARISON_TABLE — Phase 3 Baseline Battery",
+        "",
+        f"Run: `{run_dir.name}`",
+        "",
+        "| " + " | ".join(COL_ORDER) + " |",
+        "|" + "|".join(["-" * (len(c) + 2) for c in COL_ORDER]) + "|",
+    ]
+
+    def _fmt(v):
+        if v is None:
+            return "TBD"
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return str(v)
+
+    for row in rows_data:
+        cells = [_fmt(row.get(c)) for c in COL_ORDER]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "## Notes",
+        "- **Real (test)**: un-denoised raw S&P 500 log returns on the test period.",
+        "- **Vanilla**: placeholder row — requires host GPU training (see HOST_TASKS.md).",
+        "- **hist_boot / block_boot / garch_t**: CPU baselines (Phase 3).",
+        "- All metrics computed in canonical space (denoised-close log returns).",
+        "- Numbers shown are **plumbing-test only** unless generated on the host GPU with full training.",
+    ]
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"  Wrote {out_path}")
+    return out_path
+
+
+if __name__ == "__main__":
+    import sys
+    parser = argparse.ArgumentParser(description="Run comparison table assembly")
+    parser.add_argument("--run-id", required=True, help="Run directory under runs/")
+    args_cli = parser.parse_args()
+    run_dir = Path("runs") / args_cli.run_id
+    if not run_dir.exists():
+        print(f"ERROR: {run_dir} not found")
+        sys.exit(1)
+    write_comparison_table(run_dir)

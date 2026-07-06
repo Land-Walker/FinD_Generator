@@ -446,4 +446,4 @@ class VanillaTimeGradTrainingNetwork(StudentTMarginalMixin, nn.Module):
         return samples
 
 
-__all__ = ["ConditionalTimeGradTrainingNetwork"]
+__all__ = ["ConditionalTimeGradTrainingNetwork", "VanillaTimeGradTrainingNetwork"]

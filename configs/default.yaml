@@ -5,7 +5,8 @@
 
 device: null            # null -> cuda if available, else cpu
 epochs: 1
-batch_size: 64          # prior default: config.DEFAULT_BATCH = 64
+model: conditional       # conditional | vanilla (Phase 3)
+batch_size: 64           # prior default: config.DEFAULT_BATCH = 64
 context_length: 64      # prior default: config.DEFAULT_SEQ_LEN = 64
 prediction_length: 5    # prior default: config.DEFAULT_HORIZON = 5
 lr: 1.0e-3

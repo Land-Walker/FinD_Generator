@@ -36,8 +36,8 @@ from omegaconf import OmegaConf
 
 from src import config
 from src.preprocessor.data_loader import TimeGradDataModule
-from src.predictor.prediction_network import ConditionalTimeGradPredictionNetwork
-from src.training.training_network import ConditionalTimeGradTrainingNetwork
+from src.predictor.prediction_network import ConditionalTimeGradPredictionNetwork, VanillaTimeGradPredictionNetwork
+from src.training.training_network import ConditionalTimeGradTrainingNetwork, VanillaTimeGradTrainingNetwork
 from src.utils.run_folder import create_run_folder
 from src.utils.seed import set_global_seed
 
@@ -45,6 +45,7 @@ from src.utils.seed import set_global_seed
 CONFIG_KEYS = (
     "device",
     "epochs",
+    "model",
     "batch_size",
     "context_length",
     "prediction_length",
@@ -127,6 +128,32 @@ def _build_networks(
 ):
     feature_cols = dm.get_feature_columns_by_type()
     target_dim = len(feature_cols["target"])
+
+    if args.model == "vanilla":
+        train_net = VanillaTimeGradTrainingNetwork(
+            target_dim=target_dim,
+            context_length=args.context_length,
+            prediction_length=args.prediction_length,
+            diff_steps=args.diff_steps,
+            beta_end=args.beta_end,
+            beta_schedule=args.beta_schedule,
+            residual_layers=args.residual_layers,
+            residual_channels=args.residual_channels,
+        ).to(device)
+
+        predictor = VanillaTimeGradPredictionNetwork(
+            target_dim=target_dim,
+            context_length=args.context_length,
+            prediction_length=args.prediction_length,
+            diff_steps=args.diff_steps,
+            beta_end=args.beta_end,
+            beta_schedule=args.beta_schedule,
+            residual_layers=args.residual_layers,
+            residual_channels=args.residual_channels,
+        ).to(device)
+
+        return train_net, predictor
+
     cond_dynamic_dim = len(feature_cols["daily"]) + len(feature_cols["monthly"])
     cond_static_dim = len(feature_cols["regime"])
 
@@ -166,7 +193,7 @@ def _build_networks(
 
 
 def train_and_validate(
-    model: ConditionalTimeGradTrainingNetwork,
+    model,
     dm: TimeGradDataModule,
     args: argparse.Namespace,
     device: torch.device,
@@ -185,6 +212,8 @@ def train_and_validate(
     best_val = float("inf")
     best_epoch = 0
 
+    is_vanilla = args.model == "vanilla"
+
     model.train()
     with open(train_log_path, "a", encoding="utf-8") as log_file:
         for epoch in range(args.epochs):
@@ -193,11 +222,14 @@ def train_and_validate(
             for step, batch in enumerate(dm.train_dataloader()):
                 x_hist = batch["x_hist"].to(device)
                 x_future = batch["x_future"].to(device)
-                cond_dynamic = batch["cond_dynamic"].to(device)
-                cond_static = batch["cond_static"].to(device)
 
                 optimizer.zero_grad()
-                loss = model(x_hist, x_future, cond_dynamic, cond_static)
+                if is_vanilla:
+                    loss = model(x_hist, x_future)
+                else:
+                    cond_dynamic = batch["cond_dynamic"].to(device)
+                    cond_static = batch["cond_static"].to(device)
+                    loss = model(x_hist, x_future, cond_dynamic, cond_static)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -214,9 +246,12 @@ def train_and_validate(
                 for v_step, batch in enumerate(dm.val_dataloader()):
                     x_hist = batch["x_hist"].to(device)
                     x_future = batch["x_future"].to(device)
-                    cond_dynamic = batch["cond_dynamic"].to(device)
-                    cond_static = batch["cond_static"].to(device)
-                    val_loss += model(x_hist, x_future, cond_dynamic, cond_static).item()
+                    if is_vanilla:
+                        val_loss += model(x_hist, x_future).item()
+                    else:
+                        cond_dynamic = batch["cond_dynamic"].to(device)
+                        cond_static = batch["cond_static"].to(device)
+                        val_loss += model(x_hist, x_future, cond_dynamic, cond_static).item()
                     if args.max_val_steps and (v_step + 1) >= args.max_val_steps:
                         break
 
@@ -257,7 +292,7 @@ def train_and_validate(
 
 
 def run_inference(
-    predictor: ConditionalTimeGradPredictionNetwork,
+    predictor,
     dm: TimeGradDataModule,
     args: argparse.Namespace,
     device: torch.device,
@@ -270,15 +305,21 @@ def run_inference(
 
     test_batch = next(iter(dm.test_dataloader()))
     x_hist = test_batch["x_hist"].to(device)
-    cond_dynamic = test_batch["cond_dynamic"].to(device)
-    cond_static = test_batch["cond_static"].to(device)
 
-    samples = predictor.sample_autoregressive(
-        x_hist=x_hist,
-        cond_dynamic=cond_dynamic,
-        cond_static=cond_static,
-        num_samples=args.num_samples,
-    )
+    if args.model == "vanilla":
+        samples = predictor.sample_forecast(
+            x_hist=x_hist,
+            num_samples=args.num_samples,
+        )
+    else:
+        cond_dynamic = test_batch["cond_dynamic"].to(device)
+        cond_static = test_batch["cond_static"].to(device)
+        samples = predictor.sample_autoregressive(
+            x_hist=x_hist,
+            cond_dynamic=cond_dynamic,
+            cond_static=cond_static,
+            num_samples=args.num_samples,
+        )
 
     output_path = run_dir / "samples" / "forecasts.pt"
     torch.save(samples.cpu(), output_path)
@@ -298,6 +339,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", default=None, help="run folder name prefix")
     parser.add_argument("--device", default=None, help="cpu or cuda; defaults to cuda if available")
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--model", type=str, default=None, choices=["conditional", "vanilla"])
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--context-length", type=int, default=None)
     parser.add_argument("--prediction-length", type=int, default=None)
@@ -400,7 +442,8 @@ def main() -> None:
         result = run_full_evaluation(predictor, dm, run_dir, ckpt, device,
                                      num_samples=args.num_samples,
                                      sampling_strategy="full_horizon",
-                                     max_test_windows=args.max_test_steps)
+                                     max_test_windows=args.max_test_steps,
+                                     model_type=args.model)
 
         # Print headline numbers
         fm_res = result.get("forecast", {})
@@ -432,7 +475,8 @@ def main() -> None:
         run_full_evaluation(predictor, dm, run_dir, ckpt, device,
                             num_samples=args.num_samples,
                             sampling_strategy="full_horizon",
-                            max_test_windows=args.max_test_steps)
+                            max_test_windows=args.max_test_steps,
+                            model_type=args.model)
 
 
 if __name__ == "__main__":
