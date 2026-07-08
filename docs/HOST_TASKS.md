@@ -86,3 +86,37 @@ conditional, vanilla, hist_boot, block_boot, garch_t, real (test).
   omits regime columns for vanilla and baselines.
 - Baseline numbers in the smoking run (num-samples=10) are PLUMBING-TEST ONLY.
   Real numbers require num-samples=200 on host.
+
+---
+
+## Phase 4.4 — CFG Retrain + Sweep (GPU required)
+
+### CFG Retrain (train conditional with conditioning dropout)
+```bash
+python run.py --config configs/default.yaml --seed 0 \
+  --run-name cfg_retrain --model conditional \
+  --epochs 100 --cfg-dropout 0.1
+```
+This trains the conditional model with 10% conditioning dropout so the
+denoiser learns both conditional and unconditional score paths. Output:
+`runs/cfg_retrain_*/checkpoints/model_best.pt`
+
+### CFG Sweep (regime validation across cfg_scale values)
+```bash
+python run.py --config configs/default.yaml --seed 0 \
+  --run-name cfg_sweep --cfg-sweep \
+  --eval-checkpoint runs/cfg_retrain_*/checkpoints/model_best.pt \
+  --num-samples 200 --max-test-steps 0
+```
+Sweeps w ∈ {0.0, 0.5, 1.0, 2.0, 4.0} and writes `cfg_sweep.md` with
+per-regime Cohen's d and coverage. Pick the default w that maximizes
+regime-control effect size without pushing CRPS up by more than 10%.
+
+### Verify default cfg_scale preserves current behavior
+```bash
+python run.py --config configs/default.yaml --seed 0 \
+  --run-name cfg_eval_w1 --eval \
+  --eval-checkpoint runs/cfg_retrain_*/checkpoints/model_best.pt \
+  --num-samples 200 --max-test-steps 0 --cfg-scale 1.0
+```
+CRPS and coverage should match the D-① retrain within noise.

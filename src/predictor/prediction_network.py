@@ -122,6 +122,7 @@ class ConditionalTimeGradPredictionNetwork(StudentTMarginalMixin, nn.Module):
         scale_eps: float = 1e-5,
         fixed_df: float = 4.0,
         ewma_alpha: float = 0.94,
+        cfg_scale: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -176,6 +177,9 @@ class ConditionalTimeGradPredictionNetwork(StudentTMarginalMixin, nn.Module):
             cond_attn_dropout=cond_attn_dropout,
             cond_strategy=cond_strategy,
             rnn_type=rnn_type,
+            cfg_scale=cfg_scale,
+            cond_dynamic_original_dim=cond_dynamic_dim,
+            cond_static_original_dim=cond_static_dim,
         )
 
     def _normalize_cond(
@@ -222,6 +226,10 @@ class ConditionalTimeGradPredictionNetwork(StudentTMarginalMixin, nn.Module):
         cond_static_aug = torch.cat([cond_static_norm, hist_summary], dim=-1)
 
         return cond_dynamic_aug, cond_static_aug
+
+    def set_cfg_scale(self, w: float) -> None:
+        """Set CFG guidance scale at inference time."""
+        self.model.set_cfg_scale(w)
 
     @torch.no_grad()
     def sample_autoregressive(

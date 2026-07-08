@@ -135,6 +135,7 @@ class ConditionalTimeGradTrainingNetwork(StudentTMarginalMixin, nn.Module):
         scale_eps: float = 1e-5,
         fixed_df: float = 4.0,
         ewma_alpha: float = 0.94,
+        cfg_dropout: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -144,6 +145,7 @@ class ConditionalTimeGradTrainingNetwork(StudentTMarginalMixin, nn.Module):
         self.scale_eps = scale_eps
         self.fixed_df = fixed_df
         self.ewma_alpha = ewma_alpha
+        self.cfg_dropout = cfg_dropout
 
         # Keep track of inbound conditioning dimensions before augmentation.
         self.input_cond_dynamic_dim = cond_dynamic_dim
@@ -198,6 +200,9 @@ class ConditionalTimeGradTrainingNetwork(StudentTMarginalMixin, nn.Module):
             cond_attn_dropout=cond_attn_dropout,
             cond_strategy=cond_strategy,
             rnn_type=rnn_type,
+            cfg_scale=1.0,
+            cond_dynamic_original_dim=cond_dynamic_dim,
+            cond_static_original_dim=cond_static_dim,
         )
     
     def _normalize_cond(
@@ -292,6 +297,16 @@ class ConditionalTimeGradTrainingNetwork(StudentTMarginalMixin, nn.Module):
         cond_dynamic_norm, cond_static_norm = self._normalize_cond(
             cond_dynamic, cond_static
         )
+
+        # CFG conditioning dropout: randomly zero out conditioning signals
+        # so the model learns both conditional and unconditional score paths.
+        if self.training and self.cfg_dropout > 0.0:
+            batch_size = cond_dynamic_norm.shape[0]
+            keep = torch.rand(batch_size, device=cond_dynamic_norm.device) >= self.cfg_dropout
+            mask_dyn = keep.float().view(-1, 1, 1)
+            mask_static = keep.float().view(-1, 1)
+            cond_dynamic_norm = cond_dynamic_norm * mask_dyn
+            cond_static_norm = cond_static_norm * mask_static
 
         cond_dynamic_aug, cond_static_aug = self._prepare_conditioning(
             x_hist_norm, cond_dynamic_norm, cond_static_norm

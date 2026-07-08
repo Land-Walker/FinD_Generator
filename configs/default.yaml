@@ -23,6 +23,8 @@ max_train_steps: 0      # 0 = no cap
 max_val_steps: 0        # 0 = no cap
 max_test_steps: 0       # 0 = no cap
 download: false         # download fresh data instead of local parquet
+cfg_dropout: 0.0         # CFG conditioning dropout prob (0=off, 0.1=standard)
+cfg_scale: 1.0           # CFG guidance scale (1.0=conditional, 0.0=unconditional, >1=amplified)
 
 # Run identity. seed has NO default on purpose (Phase 0.4: --seed is
 # required; silent default seeding is forbidden). run_name may be set here

@@ -29,6 +29,9 @@ class ConditionedEpsilonTheta(nn.Module):
         attn_dropout: float = 0.1,
         cond_strategy: str = "fast",
         rnn_type: str = "lstm",
+        cfg_scale: float = 1.0,
+        cond_dynamic_original_dim: int = 0,
+        cond_static_original_dim: int = 0,
     ) -> None:
         super().__init__()
 
@@ -36,6 +39,12 @@ class ConditionedEpsilonTheta(nn.Module):
         self.seq_len = seq_len
         self.prediction_length = prediction_length
         self.cond_strategy = cond_strategy.lower()
+        self.cfg_scale = cfg_scale
+
+        # Original conditioning dimensions (before augmentation with history
+        # tokens). Used to zero out only the conditioning part during CFG.
+        self.cond_dynamic_original_dim = cond_dynamic_original_dim
+        self.cond_static_original_dim = cond_static_original_dim
 
         self.dynamic_encoder = nn.Linear(cond_dynamic_dim, embed_dim)
         self.static_encoder = nn.Linear(cond_static_dim, embed_dim)
@@ -90,6 +99,10 @@ class ConditionedEpsilonTheta(nn.Module):
             nn.Tanh(),
         )
 
+    def set_cfg_scale(self, w: float) -> None:
+        """Set CFG guidance scale at inference time (1.0=conditional, 0.0=unconditional)."""
+        self.cfg_scale = float(w)
+
     def forward(
         self, x: torch.Tensor, t: torch.Tensor, cond: Optional[Dict[str, torch.Tensor]] = None
     ):
@@ -102,17 +115,39 @@ class ConditionedEpsilonTheta(nn.Module):
                 ``"static"`` -> ``[B, static_dim]``.
         """
 
-        batch_size, _, horizon = x.shape
-
         if cond is None:
-            # Unconditioned path for compatibility with the core diffusion APIs.
             return self.base(x, t, cond=None)
 
         if "dynamic" not in cond or "static" not in cond:
             raise ValueError("cond must contain 'dynamic' and 'static' keys")
 
-        dyn = cond["dynamic"]  # [B, seq_len, cond_dim]
-        static = cond["static"]  # [B, static_dim]
+        if self.cfg_scale == 1.0:
+            return self._forward_cond(x, t, cond)
+
+        # CFG: eps = eps_uncond + w * (eps_cond - eps_uncond)
+        # Clone x so each call starts from the same noisy input.
+        eps_cond = self._forward_cond(x.clone(), t, cond)
+
+        zero_dynamic = torch.zeros_like(cond["dynamic"])
+        zero_static = torch.zeros_like(cond["static"])
+        if self.cond_dynamic_original_dim > 0:
+            zero_dynamic[..., self.cond_dynamic_original_dim:] = cond["dynamic"][..., self.cond_dynamic_original_dim:]
+        if self.cond_static_original_dim > 0:
+            zero_static[..., self.cond_static_original_dim:] = cond["static"][..., self.cond_static_original_dim:]
+        zero_cond = {"dynamic": zero_dynamic, "static": zero_static}
+        eps_uncond = self._forward_cond(x.clone(), t, zero_cond)
+
+        return eps_uncond + self.cfg_scale * (eps_cond - eps_uncond)
+
+    def _forward_cond(
+        self, x: torch.Tensor, t: torch.Tensor, cond: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """Internal conditioned forward path (shared by direct and CFG calls)."""
+
+        batch_size, _, horizon = x.shape
+
+        dyn = cond["dynamic"]
+        static = cond["static"]
 
         if dyn.shape[0] != batch_size or static.shape[0] != batch_size:
             raise ValueError(

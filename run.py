@@ -65,6 +65,8 @@ CONFIG_KEYS = (
     "download",
     "run_name",
     "seed",
+    "cfg_dropout",
+    "cfg_scale",
 )
 
 
@@ -171,6 +173,7 @@ def _build_networks(
         cond_embed_dim=args.cond_embed_dim,
         cond_attn_heads=args.cond_attn_heads,
         cond_attn_dropout=args.cond_attn_dropout,
+        cfg_dropout=getattr(args, "cfg_dropout", 0.0) or 0.0,
     ).to(device)
 
     predictor = ConditionalTimeGradPredictionNetwork(
@@ -187,6 +190,7 @@ def _build_networks(
         cond_embed_dim=args.cond_embed_dim,
         cond_attn_heads=args.cond_attn_heads,
         cond_attn_dropout=args.cond_attn_dropout,
+        cfg_scale=getattr(args, "cfg_scale", 1.0) or 1.0,
     ).to(device)
 
     return train_net, predictor
@@ -363,6 +367,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Download fresh data instead of loading local parquet files",
     )
+    parser.add_argument("--cfg-dropout", type=float, default=None, help="CFG conditioning dropout probability (0=off)")
+    parser.add_argument("--cfg-scale", type=float, default=None, help="CFG guidance scale (1.0=conditional, >1=amplified)")
     parser.add_argument(
         "--eval",
         action="store_const",
@@ -371,6 +377,13 @@ def parse_args() -> argparse.Namespace:
         help="Run Phase 2 evaluation after training/inference",
     )
     parser.add_argument("--eval-checkpoint", type=str, default=None, help="path to checkpoint for evaluation")
+    parser.add_argument(
+        "--cfg-sweep",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Run CFG w-sweep over regime validation (host-only)",
+    )
     return parser.parse_args()
 
 
@@ -426,9 +439,26 @@ def main() -> None:
     # Forward CLI-only flags that aren't in CONFIG_KEYS
     args.eval = bool(cli.eval)
     args.eval_checkpoint = cli.eval_checkpoint
+    args.cfg_sweep = bool(cli.cfg_sweep)
 
     dm = _prepare_datamodule(args, device)
     train_net, predictor = _build_networks(dm, args, device)
+
+    # ── cfg-sweep mode: run regime validation across cfg_scale values ──
+    if getattr(args, "cfg_sweep", None) and getattr(args, "eval_checkpoint", None):
+        from src.evaluation.cfg_sweep import run_cfg_sweep
+
+        ckpt = Path(args.eval_checkpoint)
+        if not ckpt.exists():
+            raise FileNotFoundError(f"Checkpoint not found for CFG sweep: {ckpt}")
+        print(f"Loading checkpoint: {ckpt}")
+        print("Running CFG sweep (regime validation across w ∈ {{0.0, 0.5, 1.0, 2.0, 4.0}}) ...")
+        run_cfg_sweep(predictor, dm, ckpt, device, run_dir,
+                      num_samples=args.num_samples,
+                      sampling_strategy="full_horizon",
+                      max_regime_windows=min(args.max_test_steps or 32, 32))
+        print("CFG sweep complete. See cfg_sweep.md and metrics/cfg_sweep.json")
+        return
 
     # ── eval-only mode: skip training / inference — load checkpoint directly ──
     if getattr(args, "eval", None) and getattr(args, "eval_checkpoint", None):

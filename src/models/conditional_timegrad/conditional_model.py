@@ -28,7 +28,10 @@ class ConditionalTimeGrad(nn.Module):
         cond_attn_heads: int = 4,
         cond_attn_dropout: float = 0.1,
         cond_strategy: str = "fast",
-        rnn_type: str = "lstm"
+        rnn_type: str = "lstm",
+        cfg_scale: float = 1.0,
+        cond_dynamic_original_dim: int = 0,
+        cond_static_original_dim: int = 0,
     ) -> None:
         super().__init__()
 
@@ -51,6 +54,9 @@ class ConditionalTimeGrad(nn.Module):
             attn_dropout=cond_attn_dropout,
             cond_strategy=cond_strategy,
             rnn_type=rnn_type,
+            cfg_scale=cfg_scale,
+            cond_dynamic_original_dim=cond_dynamic_original_dim,
+            cond_static_original_dim=cond_static_original_dim,
         )
 
         self.diffusion = GaussianDiffusion(
@@ -63,6 +69,10 @@ class ConditionalTimeGrad(nn.Module):
 
         self.prediction_length = prediction_length
         self.target_dim = target_dim
+
+    def set_cfg_scale(self, w: float) -> None:
+        """Set CFG guidance scale at inference time."""
+        self.epsilon_theta.set_cfg_scale(w)
 
     def forward(
         self,
