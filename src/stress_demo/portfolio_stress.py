@@ -206,20 +206,20 @@ def generate_stress_fan_chart(
         print("matplotlib not available — skipping fan chart plot")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 5), sharey=True)
 
     scenario = scenario_results.get("scenario_returns")
     uncond = scenario_results.get("unconditional_returns")
+    cfg_scale = scenario_results.get("cfg_scale", 2.0)
 
-    for ax, data, label in [
-        (axes[0], uncond, "Unconditional (w=0)"),
-        (axes[1], scenario, f"Stress (cfg={scenario_results.get('cfg_scale', 2.0)})"),
+    # --- panels 0,1: spaghetti paths ---
+    for ax, data, label, sp_col, med_col in [
+        (axes[0], uncond, "Unconditional (w=0)", "steelblue", "darkred"),
+        (axes[1], scenario, f"Stress (cfg={cfg_scale})", "darkorange", "darkred"),
     ]:
         if data is None:
             ax.set_title(f"{label}: no data")
             continue
-        # Take first n_paths_to_plot paths, each path is the terminal return
-        # data shape: (n_scenarios, n_windows, n_steps) or (n_scenarios, n_steps)
         if data.ndim == 3:
             display = data[:, 0, :]
         else:
@@ -228,14 +228,68 @@ def generate_stress_fan_chart(
         n = min(n_paths_to_plot, display.shape[0])
         for i in range(n):
             cum = np.exp(np.cumsum(display[i]))
-            ax.plot(cum, alpha=0.3, linewidth=0.5, color="steelblue")
+            ax.plot(cum, alpha=0.3, linewidth=0.5, color=sp_col)
 
         median_cum = np.exp(np.cumsum(np.median(display, axis=0)))
-        ax.plot(median_cum, color="darkred", linewidth=1.5, label="median")
+        ax.plot(median_cum, color=med_col, linewidth=1.5, label="median")
         ax.set_title(label)
         ax.set_xlabel("Step")
         ax.set_ylabel("Cumulative return")
         ax.legend()
+
+    # --- panel 2: overlay (medians + percentile bands) ---
+    ax_over = axes[2]
+
+    for data, label, color in [
+        (uncond, "Unconditional (w=0)", "steelblue"),
+        (scenario, f"Stress (cfg={cfg_scale})", "darkorange"),
+    ]:
+        if data is None:
+            continue
+        if data.ndim == 3:
+            display = data[:, 0, :]
+        else:
+            display = data
+
+        cum = np.exp(np.cumsum(display, axis=1))
+        median = np.median(cum, axis=0)
+        q5 = np.percentile(cum, 5, axis=0)
+        q25 = np.percentile(cum, 25, axis=0)
+        q75 = np.percentile(cum, 75, axis=0)
+        q95 = np.percentile(cum, 95, axis=0)
+
+        steps = np.arange(len(median))
+        ax_over.plot(steps, median, color=color, linewidth=2, label=f"{label} median")
+        ax_over.fill_between(steps, q25, q75, color=color, alpha=0.25)
+        ax_over.fill_between(steps, q5, q95, color=color, alpha=0.1)
+
+    if uncond is not None and scenario is not None:
+        if uncond.ndim == 3:
+            u_disp = uncond[:, 0, :]
+        else:
+            u_disp = uncond
+        if scenario.ndim == 3:
+            s_disp = scenario[:, 0, :]
+        else:
+            s_disp = scenario
+
+        u_var95 = np.percentile(np.sum(u_disp, axis=1), 5)
+        s_var95 = np.percentile(np.sum(s_disp, axis=1), 5)
+        n_steps = cum.shape[1]
+        y_t = np.median(cum, axis=0)[-1]
+
+        ax_over.annotate(
+            f"VaR95 (uncond): {u_var95:.1%}\nVaR95 (stress): {s_var95:.1%}",
+            xy=(n_steps * 0.98, y_t * 0.97),
+            ha="right",
+            va="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
+        )
+
+    ax_over.set_title("Overlay: Unconditional vs Stress")
+    ax_over.set_xlabel("Step")
+    ax_over.legend(fontsize=8)
 
     fig.suptitle(title, fontsize=13)
     fig.tight_layout()
