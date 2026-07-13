@@ -473,77 +473,94 @@ def _write_evaluation_report(
         "- Full regime-conditional evaluation on all test windows requires GPU (HOST_TASKS.md)." if model_type == "conditional" else "- Regime validation skipped (vanilla model has no conditioning).",
     ]
 
-def write_comparison_table(run_dir: Path) -> Path:
+def write_comparison_table(run_dir: Path, extra_metrics_dirs: Optional[Dict[str, Path]] = None) -> Path:
     """Assemble COMPARISON_TABLE.md from available metrics JSONs.
 
     Reads forecast_metrics.json for conditional/vanilla (when present) and
     baseline_*.json for the 3 CPU baselines. Rows whose JSONs are missing
     show a placeholder.
+
+    extra_metrics_dirs: dict mapping method label -> run dir path for metrics
+    from other run folders (e.g. {'conditional (CFG w=2)': Path('runs/cfg_w2')}).
     """
     metrics_dir = run_dir / "metrics"
     out_path = run_dir / "COMPARISON_TABLE.md"
 
-    def _load_metrics(name: str) -> Dict:
-        path = metrics_dir / name
+    def _load_metrics_from_dir(mdir: Path, name: str) -> Dict:
+        path = mdir / name
         if path.exists():
             with open(path) as f:
                 return json.load(f)
         return {}
+
+    _load_metrics = lambda name: _load_metrics_from_dir(metrics_dir, name)
 
     cond_fm = _load_metrics("forecast_metrics.json")
     cond_sf = _load_metrics("stylized_facts.json")
     cond_sf_gen = cond_sf.get("generated", {}) if cond_sf else {}
     cond_sf_real = cond_sf.get("real_raw_un_denoised", {}) if cond_sf else {}
 
-    methods = [
-        ("conditional", None, cond_fm, cond_sf_gen),
-        ("vanilla", "vanilla_", None, None),
-        ("hist_boot", "baseline_hist_boot", None, None),
-        ("block_boot", "baseline_block_boot", None, None),
-        ("garch_t", "baseline_garch_t", None, None),
-    ]
+    def _make_row(label, fm_data, sf_data):
+        return {
+            "Method": label,
+            "CRPS": fm_data.get("crps"),
+            "coverage_0.8": fm_data.get("coverage_0.8"),
+            "PIT_KS_p": fm_data.get("pit_ks_pvalue"),
+            "kurtosis": sf_data.get("kurtosis"),
+            "skewness": sf_data.get("skewness"),
+            "|r|_ACF1": sf_data.get("acf_abs_returns_lag1"),
+            "leverage_lag1": sf_data.get("leverage_lag1"),
+            "VaR_99": sf_data.get("var_99"),
+            "ES_99": sf_data.get("es_99"),
+            "Hill_idx": sf_data.get("tail_index_hill"),
+        }
 
     rows_data = []
-    for label, json_prefix, fm_data, sf_data in methods:
-        if json_prefix:
-            raw = _load_metrics(f"{json_prefix}.json")
-            fm_data = raw.get("forecast", {})
-            sf_data = raw.get("stylized_facts", {})
+
+    # conditional row
+    rows_data.append(_make_row("conditional", cond_fm, cond_sf_gen))
+
+    # CFG w=2 and w=4 from extra_metrics_dirs
+    if extra_metrics_dirs:
+        for label, mdir in extra_metrics_dirs.items():
+            fm = _load_metrics_from_dir(mdir, "forecast_metrics.json")
+            sf = _load_metrics_from_dir(mdir, "stylized_facts.json")
+            sf_gen = sf.get("generated", {}) if sf else {}
+            if fm and sf_gen:
+                rows_data.append(_make_row(label, fm, sf_gen))
+            else:
+                rows_data.append(_make_row(label, {}, {}))
+
+    # vanilla row — try loading from vanilla_dir in extra_metrics_dirs, then local
+    vanilla_fm = {}
+    vanilla_sf_gen = {}
+    if extra_metrics_dirs and "vanilla" in extra_metrics_dirs:
+        vfm = _load_metrics_from_dir(extra_metrics_dirs["vanilla"], "forecast_metrics.json")
+        vsf = _load_metrics_from_dir(extra_metrics_dirs["vanilla"], "stylized_facts.json")
+        vanilla_fm = vfm
+        vanilla_sf_gen = vsf.get("generated", {}) if vsf else {}
+    else:
+        raw = _load_metrics("vanilla_forecast_metrics.json")
+        vanilla_fm = raw.get("forecast", {}) if raw else {}
+        raw2 = _load_metrics("vanilla_stylized_facts.json")
+        vanilla_sf_gen = raw2.get("stylized_facts", {}).get("generated", {}) if raw2 else {}
+
+    rows_data.append(_make_row("vanilla", vanilla_fm, vanilla_sf_gen))
+
+    # Baselines
+    for label, json_prefix in [("hist_boot", "baseline_hist_boot"),
+                                ("block_boot", "baseline_block_boot"),
+                                ("garch_t", "baseline_garch_t")]:
+        raw = _load_metrics(f"{json_prefix}.json")
+        fm_data = raw.get("forecast", {})
+        sf_data = raw.get("stylized_facts", {})
         if fm_data and sf_data:
-            rows_data.append({
-                "Method": label,
-                "CRPS": fm_data.get("crps"),
-                "coverage_0.8": fm_data.get("coverage_0.8"),
-                "PIT_KS_p": fm_data.get("pit_ks_pvalue"),
-                "kurtosis": sf_data.get("kurtosis"),
-                "skewness": sf_data.get("skewness"),
-                "|r|_ACF1": sf_data.get("acf_abs_returns_lag1"),
-                "leverage_lag1": sf_data.get("leverage_lag1"),
-                "VaR_99": sf_data.get("var_99"),
-                "ES_99": sf_data.get("es_99"),
-                "Hill_idx": sf_data.get("tail_index_hill"),
-            })
+            rows_data.append(_make_row(label, fm_data, sf_data))
         else:
-            rows_data.append({
-                "Method": label,
-                "CRPS": None, "coverage_0.8": None, "PIT_KS_p": None,
-                "kurtosis": None, "skewness": None, "|r|_ACF1": None,
-                "leverage_lag1": None, "VaR_99": None, "ES_99": None,
-                "Hill_idx": None,
-            })
+            rows_data.append(_make_row(label, {}, {}))
 
     # Real reference row
-    rows_data.append({
-        "Method": "**real (test)**",
-        "CRPS": None, "coverage_0.8": None, "PIT_KS_p": None,
-        "kurtosis": cond_sf_real.get("kurtosis"),
-        "skewness": cond_sf_real.get("skewness"),
-        "|r|_ACF1": cond_sf_real.get("acf_abs_returns_lag1"),
-        "leverage_lag1": cond_sf_real.get("leverage_lag1"),
-        "VaR_99": cond_sf_real.get("var_99"),
-        "ES_99": cond_sf_real.get("es_99"),
-        "Hill_idx": cond_sf_real.get("tail_index_hill"),
-    })
+    rows_data.append(_make_row("**real (test)**", {}, cond_sf_real))
 
     COL_ORDER = [
         "Method", "CRPS", "coverage_0.8", "PIT_KS_p",

@@ -120,3 +120,57 @@ python run.py --config configs/default.yaml --seed 0 \
   --num-samples 200 --max-test-steps 0 --cfg-scale 1.0
 ```
 CRPS and coverage should match the D-① retrain within noise.
+
+---
+
+## Phase 5 — Stress Demo + Unified Comparison Table
+
+### 5a. Assemble unified COMPARISON_TABLE.md from all run folders
+```bash
+python scripts/assemble_comparison.py \
+  --conditional runs/retrain_d1__20260706-212108__seed0 \
+  --vanilla runs/vanilla_eval__20260706-214104__seed0 \
+  --cfg-w2 runs/cfg_eval_w2__20260713-212242__seed0 \
+  --cfg-w4 runs/cfg_eval_w4__20260713-214944__seed0 \
+  --out-dir runs/retrain_d1__20260706-212108__seed0
+```
+Reads forecast_metrics.json + stylized_facts.json from each folder, merges
+all rows (conditional, CFG w=2, CFG w=4, vanilla, 3 baselines, real), and
+writes COMPARISON_TABLE.md.
+
+### 5b. Stress demo — scenario generation on GPU (full N)
+```bash
+python -m src.stress_demo.scenario_run \
+  --checkpoint runs/cfg_retrain_*/checkpoints/model_best.pt \
+  --regime '{"macro_regime": "high_inflation"}' \
+  --cfg-scale 2.0 \
+  --num-scenarios 200 \
+  --num-windows 0 \
+  --run-dir runs/stress_demo_high_inflation \
+  --seed 0 --device cuda
+```
+Generates 200 scenario paths per test window under forced regime + CFG=2.0.
+Repeat for other regimes: `{"market_regime": "bear"}`, `{"macro_regime": "stagflation"}`.
+Also run at w=4 for extreme-stress comparison.
+
+### 5c. Stress demo — portfolio risk analysis (CPU, runs on saved .npz)
+```bash
+python -m src.stress_demo.portfolio_stress \
+  --scenario-npz runs/stress_demo_high_inflation/samples/scenario_returns.npz \
+  --out-dir runs/stress_demo_high_inflation
+```
+Computes VaR(95/99), ES(95/99), max-drawdown distribution, and produces
+stress_var_table.md + stress_fan_chart.png.
+
+### 5d. Regenerate cfg_sweep.md from committed sweep JSON
+Already committed: `runs/cfg_sweep__20260713-205210__seed0/cfg_sweep.md`.
+To regenerate from sweep JSON (no GPU needed):
+```bash
+python -c "
+import json; from pathlib import Path
+data = json.loads(Path('runs/cfg_sweep__20260713-205210__seed0/metrics/cfg_sweep.json').read_text())
+# The _write_cfg_sweep_md helper in src/evaluation/cfg_sweep.py writes the markdown
+from src.evaluation.cfg_sweep import _write_cfg_sweep_md
+_write_cfg_sweep_md(Path('runs/cfg_sweep__20260713-205210__seed0'), data)
+"
+```

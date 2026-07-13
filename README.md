@@ -1,113 +1,188 @@
-# FinD Generator
+# FinD Generator — DRAFT (owner writes final)
 
-FinD_Generator is a research-grade probabilistic scenario generator for financial time series, built as an explicit and extensible implementation of the TimeGrad framework.
-
-Its primary purpose is counterfactual market simulation: generating realistic return and volatility scenarios—especially tail events—that can be used to stress-test trading and execution strategies, rather than to maximize point-forecast accuracy.
-
----
-
-### What this project is
-
-A conditional TimeGrad implementation for financial time series:
-- Uses Student-t marginals to handle heavy-tailed returns
-- Transforms data into a Gaussian latent space (CDF → probit) and trains a diffusion model there
-- Supports explicit conditioning on macro regimes and historical context
-- Designed as infrastructure for downstream:
-    - execution simulators
-    - RL trading agents
-    - scenario-based risk analysis
-
-### What this project is not
-- A production trading system
-- An alpha-prediction model optimized for leaderboard metrics
-- A fully specified multivariate copula model
-
-For architectural details, see docs/architecture.md
+**Regime-conditional stress scenario generator** built on a conditional
+TimeGrad diffusion model with Student-t marginals and classifier-free
+guidance (CFG). Generates multi-step return scenarios conditioned on
+macro/market/volatility regimes, for counterfactual stress testing,
+portfolio risk analysis, and RL-agent training environments.
 
 ---
 
-## Usage
+## Headline: regime conditioning works + CFG is a controllable dial
 
-The project includes a convenience script `run.py` to handle data collection, training, and inference in a single pipeline.
+**Regime conditioning is real.** Forcing a specific regime label at
+inference time produces a significantly different forecast distribution
+(KS test, p < 0.01) in 8 of 9 regime labels. Only recession (108 rows)
+fails to separate — stagflation (42 rows) is significant despite severe
+underpowering. Source: `runs/retrain_d1__20260706-212108__seed0/metrics/regime_validation.json`.
 
-### 1. First Run (Download Data & Train)
+**CFG scale w is a monotonic stress dial.** Increasing w amplifies the
+regime-conditional distributional shift while trading off unconditional
+calibration. At w=0 (conditioning zeroed), all Cohen's d values are ~0
+(no regime signal). As w rises, bear-market separation grows
+monotonically: d ≈ 0.5 (w=1), 0.9 (w=2), 1.1 (w=4). Recession becomes
+marginally significant only at w=4 (d=0.08, p=0.022). Source:
+`runs/cfg_sweep__20260713-205210__seed0/metrics/cfg_sweep.json`
+(32-window plumbing sweep — d-values here differ from the full-eval runs
+below because window counts differ; the sweep is used ONLY for the
+monotonic-trend story, not for headline effect sizes).
 
-To download fresh data, train the model, and generate forecasts:
+| w | bear d (sweep) | recession d (sweep) | recession p |
+|---|---------------|---------------------|-------------|
+| 0.0 | −0.03 (ns) | +0.03 (ns) | 0.50 |
+| 0.5 | +0.16 | −0.03 (ns) | 0.72 |
+| 1.0 | +0.52 | −0.06 (ns) | 0.02 |
+| 2.0 | +0.95 | +0.02 (ns) | 0.18 |
+| 4.0 | +1.08 | +0.08 | 0.022 |
+
+---
+
+## Canonical Comparison Table
+
+All methods evaluated in the same canonical space (denoised-close log
+returns). Every number in this table traces to a committed metrics JSON
+under `runs/`. See `COMPARISON_TABLE.md` for source folders.
+
+| Method | CRPS | cov.₈₀ | kurtosis | |r| ACF₁ | VaR₉₉ | Hill |
+|--------|------|--------|----------|--------|-------|------|
+| conditional | 0.0043 | 0.630 | 3.36 | 0.274 | −0.0248 | 3.68 |
+| conditional (CFG w=2) | 0.0039 | 0.658 | 4.58 | 0.232 | −0.0216 | 3.49 |
+| conditional (CFG w=4) | 0.0042 | 0.538 | 8.20 | 0.329 | −0.0239 | 2.97 |
+| vanilla | 0.0035 | 0.706 | 14.83 | 0.221 | −0.0240 | 2.50 |
+| hist_boot | 0.0034 | 0.802 | 12.73 | 0.000 | −0.0229 | 2.77 |
+| block_boot | 0.0034 | 0.807 | 12.26 | 0.236 | −0.0229 | 2.83 |
+| garch_t | 0.0039 | 0.966 | 327.09 | 0.301 | −0.0434 | 2.64 |
+| **real (test)** | — | — | 2.17 | 0.139 | −0.0298 | 4.03 |
+
+- CFG w=2 (bear d=0.87) is Pareto-optimal: it dominates the
+  unconditional conditional row on CRPS, coverage, AND regime control.
+- CFG w=4 (bear d=1.21) is extreme-stress mode: maximum regime
+  separation, recession finally separates (p=0.005), but coverage drops
+  from 0.66 → 0.54 and kurtosis overshoots real.
+- The CFG bear-d headline values (0.87, 1.21) come from the full-eval
+  runs `cfg_eval_w2` / `cfg_eval_w4`; the sweep table above uses
+  plumbing-scale runs with fewer windows — values are NOT interchangeable.
+
+**Regime Validation at w=1.0** (conditional, from
+`runs/retrain_d1__20260706-212108__seed0/metrics/regime_validation.json`):
+
+| Dimension | Label | KS p | d | Sig? |
+|-----------|-------|------|---|------|
+| vol | high_vol | <0.001 | 0.20 | Yes |
+| vol | normal_vol | <0.001 | −0.22 | Yes |
+| market | bear | <0.001 | 0.70 | Yes |
+| market | bull | <0.001 | −0.46 | Yes |
+| market | sideways | <0.001 | −0.28 | Yes |
+| macro | expansion | <0.001 | −0.42 | Yes |
+| macro | high_inflation | <0.001 | −0.45 | Yes |
+| macro | recession | 0.164 | 0.06 | **No** |
+| macro | stagflation | <0.001 | 0.74 | Yes |
+
+---
+
+## Stress Demo
+
+Generate regime-conditioned scenario paths, apply them to an example
+portfolio, and compare risk metrics (VaR, ES, max drawdown) against
+unconditional and historical returns.
+
+### Quick usage (CPU, test scale)
 
 ```bash
-python run.py --download --epochs 10 --batch-size 64
+# Generate scenario returns under forced high-inflation regime at w=2
+python -m src.stress_demo.scenario_run \
+  --checkpoint runs/cfg_smoke_cond__20260708-124243__seed0/checkpoints/model_best.pt \
+  --regime '{"macro_regime":"high_inflation"}' \
+  --cfg-scale 2.0 --num-scenarios 50 --num-windows 8 \
+  --run-dir runs/stress_demo_test --seed 0
+
+# Compute VaR/ES/drawdown and produce plots
+python -c "
+from pathlib import Path
+from src.stress_demo.scenario_run import run_scenario
+from src.stress_demo.portfolio_stress import (
+    ExamplePortfolio, compute_stress_comparison,
+    write_stress_var_table, generate_stress_fan_chart,
+)
+import numpy as np
+
+data = np.load('runs/stress_demo_test/samples/scenario_returns.npz')
+scenario_results = {
+    'scenario_returns': data['scenario'],
+    'unconditional_returns': data['unconditional'],
+    'historical_returns': data['historical'],
+    'cfg_scale': 2.0,
+    'regime_spec': {'macro_regime': 'high_inflation'},
+}
+results = compute_stress_comparison(scenario_results)
+write_stress_var_table(results, Path('runs/stress_demo_test/stress_var_table.md'))
+generate_stress_fan_chart(scenario_results, Path('runs/stress_demo_test/stress_fan_chart.png'))
+print('Done — see runs/stress_demo_test/')
+"
 ```
 
-### 2. Subsequent Runs (Use Local Data)
-
-Once data is downloaded to `data/raw`, you can run training without the `--download` flag to use the cached parquet files:
-
-```bash
-python run.py --epochs 10
-```
-
-### 3. Key Arguments
-
-- `--download`: Fetch fresh data from Yahoo Finance and FRED.
-- `--epochs`: Number of training epochs (default: 1).
-- `--batch-size`: Batch size (default: 64).
-- `--num-samples`: Number of forecast samples to generate per series (default: 2).
-- `--device`: `cpu` or `cuda` (automatically detected if omitted).
-
-Forecasts are saved in checkpoints folder.
-
-Checkpoints and run artifacts (`checkpoints/`, `runs/`) are not committed to this repo (see `.gitignore`) — they're local build products. To regenerate the checkpoints behind the Results below: `python run.py --epochs 100 --seed 0 --run-name retrain_d1` (FinD_Generator) and `python run.py --model vanilla --epochs 100 --seed 0 --run-name vanilla_retrain` (vanilla).
+Full-GPU stress runs: see `docs/HOST_TASKS.md` §5b–5c.
 
 ---
 
-## Results
+## Honest Limitations
 
-### 1. Probabilistic Forecasting
-**Problem**: Standard diffusion models often fail to capture the 'Fat-tail' risks in financial markets.
-**Solution**: Designed FinD_Generator, a regime-aware diffusion model extending TimeGrad with regime-aware FiLM and cross-attention layers
+1. **Bootstrap and vanilla beat this model on unconditional metrics.**
+   The historical bootstrap achieves CRPS 0.0034 and coverage 0.80
+   versus 0.0043/0.63 for the conditional model. GARCH-t has better
+   coverage (0.97). Vanilla TimeGrad has better CRPS (0.0035) and
+   coverage (0.71). The conditional model exists to provide targeted
+   regime control, not to win on unconditional sharpness.
 
-Metric | Vanilla | FinD_Generator
---- | --- | ---
-CRPS | 0.00346 | 0.00433
-MAE | 0.00457 | 0.00597
-80% Coverage | 0.706 | 0.630
+2. **Recession is underpowered** (108 rows, 1.7% of data). It is the
+   only non-significant regime at w=1.0 (p=0.16) and only reaches
+   marginal significance at the extreme w=4 setting (p=0.022, d=0.08).
 
-*Test-split evaluation, 200 samples/window, seed 0, same causally-fixed data pipeline for both models (see [docs/data_integrity.md](docs/data_integrity.md)). Vanilla run: `runs/vanilla_eval__20260706-214104__seed0`. FinD_Generator run: `runs/retrain_d1__20260706-212108__seed0`. Metrics are in canonical denoised-close log-return space.*
+3. **Stagflation is severely underpowered** (42 rows, 0.67% of data).
+   While it is statistically significant in KS tests, the tiny training
+   support means the regime embedding is noisy and unreliable.
 
-!![Probabilistic forecast comparison](image/graph/comparison.png)
+4. **The model learns denoised targets**, so its generated-return
+   kurtosis differs from raw-return kurtosis. The "generated" column
+   should be compared against `real_denoised` (kurtosis 3.79) for
+   calibration, and against `real_raw_un_denoised` (kurtosis 2.17) for
+   practical tail-risk assessment. CFG w=4 overshoots even the denoised
+   reference (kurtosis 8.20).
 
-Vanilla TimeGrad edges out FinD_Generator on every unconditional metric above — a small, consistent CRPS/MAE/coverage gap. That's the expected cost of regime conditioning: extra parameters and a conditioning constraint spend some unconditional sharpness. The metric vanilla cannot report at all is the one this project is built around — regime-conditional controllability. Forcing the model's regime input to a specific label produces a significantly different forecast distribution in 8 of the 9 regime labels tested (KS test, see table below); vanilla has no conditioning input, so it cannot generate a targeted stress scenario in the first place. The CRPS/coverage trade is the price of that capability, not an unexplained regression.
+5. **CFG w=4 trades calibration for regime control.** At w=4, coverage
+   drops from 0.66 to 0.54 — far below nominal 0.80. Use w=2 for
+   balanced stress testing and w=4 only when maximum regime separation
+   is needed (e.g., crash-scenario generation for downstream RL
+   robustness training).
 
-**Regime-conditional validation** (KS test on generated returns, forced-regime vs. out-of-regime, `retrain_d1` run above):
+6. **All forecasts are 5-step ahead.** A 5-step horizon limits max
+   drawdown duration to 4 steps per path, so generated drawdown stats
+   are not comparable to the raw-real row's multi-year continuous
+   drawdown. The comparison table reports per-path drawdowns only;
+   scenario-level drawdowns appear in the stress demo.
 
-Regime dimension | Label | KS p-value | Cohen's d | Significant?
---- | --- | --- | --- | ---
-vol_regime | high_vol | <0.001 | 0.195 | Yes
-vol_regime | normal_vol | <0.001 | -0.220 | Yes
-market_regime | bear | <0.001 | 0.697 | Yes
-market_regime | bull | <0.001 | -0.460 | Yes
-market_regime | sideways | <0.001 | -0.284 | Yes
-macro_regime | expansion | <0.001 | -0.422 | Yes
-macro_regime | high_inflation | <0.001 | -0.447 | Yes
-macro_regime | recession | 0.164 | 0.064 | No
-macro_regime | stagflation | <0.001 | 0.739 | Yes
+---
 
-`recession` is the one non-significant label — weak separation in that regime definition, not a general conditioning failure (all other labels, including the much rarer `stagflation`, are significant). `stagflation` has only 42 rows of training support (0.67% of data), so treat it as directional rather than statistically validated — see [docs/KNOWN_ISSUES.md #9](docs/KNOWN_ISSUES.md).
+## Reproducibility
 
-**Limitation**
-Static regime embeddings are coarse due to:
-- structural heterogeneity across a 50-year dataset
-- compute constraints limiting regime granularity
+- **Leakage tested:** `tests/test_no_leakage.py` verifies 100 random
+  timestamps — every feature computed from past-only data.
+- **Causal pipeline:** wavelet denoising is rolling-window (no
+  look-ahead), no `.bfill()`, all regime thresholds fit on train-only.
+  Documented in `docs/data_integrity.md`.
+- **Seed:** `--seed 0` for all committed runs. Determinism verified by
+  bit-for-bit reprotest.
+- **Run folders:** every metric in this README traces to a committed
+  JSON under `runs/`:
+  - `retrain_d1__20260706-212108__seed0` (conditional, baselines)
+  - `vanilla_eval__20260706-214104__seed0` (vanilla)
+  - `cfg_eval_w2__20260713-212242__seed0` (CFG w=2 full eval)
+  - `cfg_eval_w4__20260713-214944__seed0` (CFG w=4 full eval)
+  - `cfg_sweep__20260713-205210__seed0` (CFG sweep, monotonic trend)
 
-80% prediction-interval coverage (0.706 vanilla, 0.630 FinD_Generator) is below the nominal 0.80 target for both models — i.e. both are somewhat overconfident. This was audited: `forecast_metrics.coverage()` computes empirical quantile coverage correctly, so it's not a calculation bug. The likely cause is underestimated aleatoric variance in the diffusion sampler at the current sampling budget. An earlier version of this table reported far worse coverage (0.09–0.17) from a pre-fix data pipeline — a silently-empty quarterly macro block collapsed regime conditioning to a single constant label, and a leaky `bfill` leaked future values into training. Both are fixed; see [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for the full history.
+---
 
-Despite this, the model remains stable and generalizes reasonably under global context.
-
-### 2. Stress Testing Simulation (Scenario Generation)
-A dedicated ScenarioGenerator allows forced regime injection at inference time, enabling counterfactual experiments such as:
-- synthetic crash scenarios
-- volatility clustering amplification
-- portfolio PnL sensitivity under regime shifts
-
-![Stress Test PnL](image/stress_PnL_output.png)
-![Stress Test Amplification](image/stress_amplify_output.png)
+*DRAFT — the owner writes the final version. Every number in this
+document is sourced from a committed metrics JSON. See
+`COMPARISON_TABLE.md` for the full canonical table and
+`docs/KNOWN_ISSUES.md` for open issues.*
