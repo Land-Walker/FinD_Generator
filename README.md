@@ -22,7 +22,7 @@ calibration. At w=0 (conditioning zeroed), all Cohen's d values are ~0
 (no regime signal). As w rises, bear-market separation grows
 monotonically: d ≈ 0.5 (w=1), 0.9 (w=2), 1.1 (w=4). Recession becomes
 marginally significant only at w=4 (d=0.08, p=0.022). Source:
-`runs/cfg_sweep__20260713-205210__seed0/metrics/cfg_sweep.json`
+`docs/cfg_sweep.md` (sweep data from committed JSON).
 (32-window plumbing sweep — d-values here differ from the full-eval runs
 below because window counts differ; the sweep is used ONLY for the
 monotonic-trend story, not for headline effect sizes).
@@ -41,7 +41,8 @@ monotonic-trend story, not for headline effect sizes).
 
 All methods evaluated in the same canonical space (denoised-close log
 returns). Every number in this table traces to a committed metrics JSON
-under `runs/`. See `COMPARISON_TABLE.md` for source folders.
+under `runs/`. See `COMPARISON_TABLE.md` at the repo root for the full table
+with source folder attribution and regime validation details.
 
 | Method | CRPS | cov.₈₀ | kurtosis | |r| ACF₁ | VaR₉₉ | Hill |
 |--------|------|--------|----------|--------|-------|------|
@@ -184,5 +185,5 @@ Full-GPU stress runs: see `docs/HOST_TASKS.md` §5b–5c.
 
 *DRAFT — the owner writes the final version. Every number in this
 document is sourced from a committed metrics JSON. See
-`COMPARISON_TABLE.md` for the full canonical table and
-`docs/KNOWN_ISSUES.md` for open issues.*
+`COMPARISON_TABLE.md` for the full canonical table, `docs/cfg_sweep.md`
+for the CFG sweep trends, and `docs/KNOWN_ISSUES.md` for open issues.*
