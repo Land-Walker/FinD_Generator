@@ -1,0 +1,80 @@
+{
+  "vol_regime": {
+    "regime_high_vol": {
+      "ks_stat": 0.228,
+      "ks_pvalue": 3.4392828740186846e-23,
+      "energy_dist": 0.000482692293473661,
+      "cohens_d": 0.3604647096070219,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_normal_vol": {
+      "ks_stat": 0.253,
+      "ks_pvalue": 1.6300754154993291e-28,
+      "energy_dist": 0.0006337407901563993,
+      "cohens_d": -0.4238813344202635,
+      "n_g": 1000,
+      "n_not_g": 1000
+    }
+  },
+  "market_regime": {
+    "regime_bear": {
+      "ks_stat": 0.504,
+      "ks_pvalue": 6.683182560861083e-116,
+      "energy_dist": 0.004465042143899304,
+      "cohens_d": 1.206149619587787,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_bull": {
+      "ks_stat": 0.347,
+      "ks_pvalue": 8.558957839743207e-54,
+      "energy_dist": 0.0018925731745320805,
+      "cohens_d": -0.683693914510722,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_sideways": {
+      "ks_stat": 0.228,
+      "ks_pvalue": 3.4392828740186846e-23,
+      "energy_dist": 0.0007946843917241847,
+      "cohens_d": -0.44231283897399976,
+      "n_g": 1000,
+      "n_not_g": 1000
+    }
+  },
+  "macro_regime": {
+    "regime_expansion": {
+      "ks_stat": 0.205,
+      "ks_pvalue": 8.493582764331036e-19,
+      "energy_dist": 0.0004576271014257484,
+      "cohens_d": -0.34848199975070115,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_high_inflation": {
+      "ks_stat": 0.235,
+      "ks_pvalue": 1.2696120775805016e-24,
+      "energy_dist": 0.0007144625285363856,
+      "cohens_d": -0.5130438449684172,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_recession": {
+      "ks_stat": 0.078,
+      "ks_pvalue": 0.004543821879051605,
+      "energy_dist": 7.556054329953266e-05,
+      "cohens_d": 0.14811968718539725,
+      "n_g": 1000,
+      "n_not_g": 1000
+    },
+    "regime_stagflation": {
+      "ks_stat": 0.32,
+      "ks_pvalue": 1.150351290993759e-45,
+      "energy_dist": 0.0015797769073171179,
+      "cohens_d": 0.7047918519623657,
+      "n_g": 1000,
+      "n_not_g": 1000
+    }
+  }
+}
