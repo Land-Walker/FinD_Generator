@@ -1,0 +1,417 @@
+{
+  "w=0.0": {
+    "regime_validation": {
+      "vol_regime": {
+        "regime_high_vol": {
+          "ks_stat": 0.053,
+          "ks_pvalue": 0.12051526066065596,
+          "energy_dist": -1.3973210272488247e-06,
+          "cohens_d": -0.03534550930851265,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_normal_vol": {
+          "ks_stat": 0.061,
+          "ks_pvalue": 0.04839715079181246,
+          "energy_dist": 5.063340033738175e-06,
+          "cohens_d": -0.07285399536859609,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "market_regime": {
+        "regime_bear": {
+          "ks_stat": 0.053,
+          "ks_pvalue": 0.12051526066065596,
+          "energy_dist": 5.738795405166135e-07,
+          "cohens_d": -0.0313627225997122,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_bull": {
+          "ks_stat": 0.033,
+          "ks_pvalue": 0.647814872077161,
+          "energy_dist": -3.844710961257991e-06,
+          "cohens_d": -0.02122293807116861,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_sideways": {
+          "ks_stat": 0.038,
+          "ks_pvalue": 0.4659595288557257,
+          "energy_dist": 4.165647572072339e-06,
+          "cohens_d": -0.08793201139718397,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "macro_regime": {
+        "regime_expansion": {
+          "ks_stat": 0.031,
+          "ks_pvalue": 0.7228251828701066,
+          "energy_dist": -3.53288466097652e-06,
+          "cohens_d": 0.029390171926179938,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_high_inflation": {
+          "ks_stat": 0.017,
+          "ks_pvalue": 0.9987234512860412,
+          "energy_dist": -5.047687920200182e-06,
+          "cohens_d": 0.01899565903157806,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_recession": {
+          "ks_stat": 0.037,
+          "ks_pvalue": 0.5005673707894058,
+          "energy_dist": -3.4234685178319638e-06,
+          "cohens_d": 0.03255512078664758,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_stagflation": {
+          "ks_stat": 0.037,
+          "ks_pvalue": 0.5005673707894058,
+          "energy_dist": 1.4302174304067598e-06,
+          "cohens_d": 0.021349926261316474,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      }
+    },
+    "elapsed_s": 153.58141779899597
+  },
+  "w=0.5": {
+    "regime_validation": {
+      "vol_regime": {
+        "regime_high_vol": {
+          "ks_stat": 0.038,
+          "ks_pvalue": 0.4659595288557257,
+          "energy_dist": 1.0781739275458196e-06,
+          "cohens_d": 0.0626053253053406,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_normal_vol": {
+          "ks_stat": 0.037,
+          "ks_pvalue": 0.5005673707894058,
+          "energy_dist": -2.9035810676890372e-06,
+          "cohens_d": -0.03507971035722036,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "market_regime": {
+        "regime_bear": {
+          "ks_stat": 0.095,
+          "ks_pvalue": 0.00023854664270315346,
+          "energy_dist": 4.9188615027910033e-05,
+          "cohens_d": 0.16217646566167004,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_bull": {
+          "ks_stat": 0.113,
+          "ks_pvalue": 5.577646320340156e-06,
+          "energy_dist": 8.630650839438125e-05,
+          "cohens_d": -0.21850830975179913,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_sideways": {
+          "ks_stat": 0.055,
+          "ks_pvalue": 0.09710349657052789,
+          "energy_dist": 9.941408557012296e-06,
+          "cohens_d": -0.08673393999143415,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "macro_regime": {
+        "regime_expansion": {
+          "ks_stat": 0.081,
+          "ks_pvalue": 0.0028179208242694134,
+          "energy_dist": 1.941034531596558e-05,
+          "cohens_d": -0.0616166673915832,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_high_inflation": {
+          "ks_stat": 0.044,
+          "ks_pvalue": 0.28779764348473313,
+          "energy_dist": 2.727321537438279e-07,
+          "cohens_d": -0.04920418486320705,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_recession": {
+          "ks_stat": 0.031,
+          "ks_pvalue": 0.7228251828701066,
+          "energy_dist": -3.072131800941919e-06,
+          "cohens_d": -0.02856820720407733,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_stagflation": {
+          "ks_stat": 0.066,
+          "ks_pvalue": 0.025633868930359294,
+          "energy_dist": 2.8642790797545666e-05,
+          "cohens_d": 0.139864408252405,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      }
+    },
+    "elapsed_s": 203.0627884864807
+  },
+  "w=1.0": {
+    "regime_validation": {
+      "vol_regime": {
+        "regime_high_vol": {
+          "ks_stat": 0.079,
+          "ks_pvalue": 0.0038826726503625613,
+          "energy_dist": 3.0716959690842496e-05,
+          "cohens_d": 0.1475997626663148,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_normal_vol": {
+          "ks_stat": 0.061,
+          "ks_pvalue": 0.04839715079181246,
+          "energy_dist": 1.6927779468980594e-05,
+          "cohens_d": -0.11914679481596653,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "market_regime": {
+        "regime_bear": {
+          "ks_stat": 0.238,
+          "ks_pvalue": 2.991173205019326e-25,
+          "energy_dist": 0.0005667475405910297,
+          "cohens_d": 0.5208860863749886,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_bull": {
+          "ks_stat": 0.187,
+          "ks_pvalue": 1.0768117192423136e-15,
+          "energy_dist": 0.00032747573757249595,
+          "cohens_d": -0.38598245775855633,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_sideways": {
+          "ks_stat": 0.103,
+          "ks_pvalue": 4.872295384883887e-05,
+          "energy_dist": 9.07928111708832e-05,
+          "cohens_d": -0.2131018187719963,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "macro_regime": {
+        "regime_expansion": {
+          "ks_stat": 0.085,
+          "ks_pvalue": 0.0014488954599620356,
+          "energy_dist": 4.0764096605098044e-05,
+          "cohens_d": -0.1543936094266683,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_high_inflation": {
+          "ks_stat": 0.055,
+          "ks_pvalue": 0.09710349657052789,
+          "energy_dist": 1.7028503410883387e-05,
+          "cohens_d": -0.12029034239873147,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_recession": {
+          "ks_stat": 0.067,
+          "ks_pvalue": 0.022438659451142425,
+          "energy_dist": 2.2645603690319913e-05,
+          "cohens_d": -0.05848916187604167,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_stagflation": {
+          "ks_stat": 0.137,
+          "ks_pvalue": 1.3433151993983066e-08,
+          "energy_dist": 0.00019407978376178052,
+          "cohens_d": 0.3364564757470175,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      }
+    },
+    "elapsed_s": 98.7960433959961
+  },
+  "w=2.0": {
+    "regime_validation": {
+      "vol_regime": {
+        "regime_high_vol": {
+          "ks_stat": 0.167,
+          "ks_pvalue": 1.3746584738471068e-12,
+          "energy_dist": 0.0002312748980720751,
+          "cohens_d": 0.32940627927264127,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_normal_vol": {
+          "ks_stat": 0.114,
+          "ks_pvalue": 4.441088228134397e-06,
+          "energy_dist": 9.362530950139279e-05,
+          "cohens_d": -0.23050190543320606,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "market_regime": {
+        "regime_bear": {
+          "ks_stat": 0.418,
+          "ks_pvalue": 1.2040448267583641e-78,
+          "energy_dist": 0.0022505993702209327,
+          "cohens_d": 0.9470727650200769,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_bull": {
+          "ks_stat": 0.309,
+          "ks_pvalue": 1.4773569429441138e-42,
+          "energy_dist": 0.0011672223551217062,
+          "cohens_d": -0.6375164237144091,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_sideways": {
+          "ks_stat": 0.15,
+          "ks_pvalue": 3.143161402242108e-10,
+          "energy_dist": 0.00024842680005505643,
+          "cohens_d": -0.3077743044762681,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "macro_regime": {
+        "regime_expansion": {
+          "ks_stat": 0.126,
+          "ks_pvalue": 2.461977466455732e-07,
+          "energy_dist": 0.00012155221495751926,
+          "cohens_d": -0.23523329008622543,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_high_inflation": {
+          "ks_stat": 0.109,
+          "ks_pvalue": 1.3598954602798138e-05,
+          "energy_dist": 0.00012399730806347733,
+          "cohens_d": -0.25050160423090334,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_recession": {
+          "ks_stat": 0.049,
+          "ks_pvalue": 0.18116454248303263,
+          "energy_dist": 1.3163903730214858e-05,
+          "cohens_d": 0.020496300090607687,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_stagflation": {
+          "ks_stat": 0.284,
+          "ks_pvalue": 6.368984280614877e-36,
+          "energy_dist": 0.0008125505117971355,
+          "cohens_d": 0.5942182483138111,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      }
+    },
+    "elapsed_s": 203.38525319099426
+  },
+  "w=4.0": {
+    "regime_validation": {
+      "vol_regime": {
+        "regime_high_vol": {
+          "ks_stat": 0.236,
+          "ks_pvalue": 7.8580359170637845e-25,
+          "energy_dist": 0.0005478451437495153,
+          "cohens_d": 0.42094433528016306,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_normal_vol": {
+          "ks_stat": 0.246,
+          "ks_pvalue": 5.7690608353924265e-27,
+          "energy_dist": 0.0005780346990614778,
+          "cohens_d": -0.43742194451046945,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "market_regime": {
+        "regime_bear": {
+          "ks_stat": 0.452,
+          "ks_pvalue": 2.1055463842014912e-92,
+          "energy_dist": 0.0036535296518946086,
+          "cohens_d": 1.083004830200737,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_bull": {
+          "ks_stat": 0.363,
+          "ks_pvalue": 5.984549534676681e-59,
+          "energy_dist": 0.0020284929254185957,
+          "cohens_d": -0.68793972203808,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_sideways": {
+          "ks_stat": 0.218,
+          "ks_pvalue": 3.202737354157636e-21,
+          "energy_dist": 0.0007188900274376119,
+          "cohens_d": -0.41939795072264663,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      },
+      "macro_regime": {
+        "regime_expansion": {
+          "ks_stat": 0.187,
+          "ks_pvalue": 1.0768117192423136e-15,
+          "energy_dist": 0.0003942452728881657,
+          "cohens_d": -0.3401132366116812,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_high_inflation": {
+          "ks_stat": 0.192,
+          "ks_pvalue": 1.583096794215111e-16,
+          "energy_dist": 0.0005131093260730604,
+          "cohens_d": -0.43722373873255177,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_recession": {
+          "ks_stat": 0.067,
+          "ks_pvalue": 0.022438659451142425,
+          "energy_dist": 3.5011292178431346e-05,
+          "cohens_d": 0.0750837657869461,
+          "n_g": 1000,
+          "n_not_g": 1000
+        },
+        "regime_stagflation": {
+          "ks_stat": 0.323,
+          "ks_pvalue": 1.5586361620357814e-46,
+          "energy_dist": 0.001517769113016285,
+          "cohens_d": 0.7077115640672998,
+          "n_g": 1000,
+          "n_not_g": 1000
+        }
+      }
+    },
+    "elapsed_s": 247.6369824409485
+  }
+}
