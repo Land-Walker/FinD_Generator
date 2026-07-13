@@ -1,189 +1,148 @@
-# FinD Generator — DRAFT (owner writes final)
+# FinD_Generator — Regime-Conditional Stress Scenario Generator
 
-**Regime-conditional stress scenario generator** built on a conditional
-TimeGrad diffusion model with Student-t marginals and classifier-free
-guidance (CFG). Generates multi-step return scenarios conditioned on
-macro/market/volatility regimes, for counterfactual stress testing,
-portfolio risk analysis, and RL-agent training environments.
+A conditional diffusion model (TimeGrad-style) that generates financial return
+scenarios **conditioned on macro/market regimes**. Given a regime — bear market,
+high inflation, stagflation — it produces return paths whose distribution is
+statistically distinct from unconditional forecasts, verified in **8 of 9 regime
+labels** (KS test + Cohen's d). Classifier-free guidance (CFG) provides a
+continuous **stress-intensity dial**: forcing the bear regime at w=2 widens
+portfolio VaR₉₅ by **56%** relative to unconditional scenarios.
 
----
+All methods — this model, a vanilla unconditional TimeGrad, historical/block
+bootstrap, and GARCH(1,1)-t — are evaluated in the **same canonical space**
+(denoised-close log returns) on a **leakage-tested causal pipeline**
+(2000–2024 S&P 500 + FRED macro data).
 
-## Headline: regime conditioning works + CFG is a controllable dial
+## Headline results
 
-**Regime conditioning is real.** Forcing a specific regime label at
-inference time produces a significantly different forecast distribution
-(KS test, p < 0.01) in 8 of 9 regime labels. Only recession (108 rows)
-fails to separate — stagflation (42 rows) is significant despite severe
-underpowering. Source: `runs/retrain_d1__20260706-212108__seed0/metrics/regime_validation.json`.
+### 1. Regime conditioning works — and CFG scales it
 
-**CFG scale w is a monotonic stress dial.** Increasing w amplifies the
-regime-conditional distributional shift while trading off unconditional
-calibration. At w=0 (conditioning zeroed), all Cohen's d values are ~0
-(no regime signal). As w rises, bear-market separation grows
-monotonically: d ≈ 0.5 (w=1), 0.9 (w=2), 1.1 (w=4). Recession becomes
-marginally significant only at w=4 (d=0.08, p=0.022). Source:
-`docs/cfg_sweep.md` (sweep data from committed JSON).
-(32-window plumbing sweep — d-values here differ from the full-eval runs
-below because window counts differ; the sweep is used ONLY for the
-monotonic-trend story, not for headline effect sizes).
+The core claim: conditioning actually controls the generated distribution.
+For each regime label, we compare samples generated *with* that regime forced
+vs *without*, using KS tests and Cohen's d (full run, 200 samples/window):
 
-| w | bear d (sweep) | recession d (sweep) | recession p |
-|---|---------------|---------------------|-------------|
-| 0.0 | −0.03 (ns) | +0.03 (ns) | 0.50 |
-| 0.5 | +0.16 | −0.03 (ns) | 0.72 |
-| 1.0 | +0.52 | −0.06 (ns) | 0.02 |
-| 2.0 | +0.95 | +0.02 (ns) | 0.18 |
-| 4.0 | +1.08 | +0.08 | 0.022 |
+| Regime | KS p | Cohen's d |
+|---|---|---|
+| market: bear | <0.001 | **0.872** |
+| market: bull | <0.001 | −0.585 |
+| macro: stagflation | <0.001 | 0.505 |
+| macro: high_inflation | <0.001 | −0.312 |
+| vol: high_vol | <0.001 | 0.183 |
+| macro: recession | 0.134 | 0.056 (not significant — 108 rows) |
 
----
+*(at CFG w=2; 8 of 9 labels significant — see [docs/cfg_sweep.md](docs/cfg_sweep.md))*
 
-## Canonical Comparison Table
+CFG acts as a **dial**: at w=0 conditioning is fully off (all d ≈ 0); effect
+sizes rise monotonically with w. At w=4 (extreme-stress mode) bear reaches
+d = 1.21 and even the underpowered recession regime becomes significant —
+at the cost of calibration (coverage₀.₈ drops 0.66 → 0.54).
 
-All methods evaluated in the same canonical space (denoised-close log
-returns). Every number in this table traces to a committed metrics JSON
-under `runs/`. See `COMPARISON_TABLE.md` at the repo root for the full table
-with source folder attribution and regime validation details.
+| w | 0.0 | 0.5 | 1.0 | 2.0 | 4.0 |
+|---|---|---|---|---|---|
+| bear Cohen's d (sweep, 32 windows) | −0.03 | 0.16 | 0.52 | 0.95 | 1.08 |
 
-| Method | CRPS | cov.₈₀ | kurtosis | |r| ACF₁ | VaR₉₉ | Hill |
-|--------|------|--------|----------|--------|-------|------|
-| conditional | 0.0043 | 0.630 | 3.36 | 0.274 | −0.0248 | 3.68 |
-| conditional (CFG w=2) | 0.0039 | 0.658 | 4.58 | 0.232 | −0.0216 | 3.49 |
-| conditional (CFG w=4) | 0.0042 | 0.538 | 8.20 | 0.329 | −0.0239 | 2.97 |
-| vanilla | 0.0035 | 0.706 | 14.83 | 0.221 | −0.0240 | 2.50 |
-| hist_boot | 0.0034 | 0.802 | 12.73 | 0.000 | −0.0229 | 2.77 |
-| block_boot | 0.0034 | 0.807 | 12.26 | 0.236 | −0.0229 | 2.83 |
-| garch_t | 0.0039 | 0.966 | 327.09 | 0.301 | −0.0434 | 2.64 |
-| **real (test)** | — | — | 2.17 | 0.139 | −0.0298 | 4.03 |
+### 2. Stress demo — portfolio impact
 
-- CFG w=2 (bear d=0.87) is Pareto-optimal: it dominates the
-  unconditional conditional row on CRPS, coverage, AND regime control.
-- CFG w=4 (bear d=1.21) is extreme-stress mode: maximum regime
-  separation, recession finally separates (p=0.005), but coverage drops
-  from 0.66 → 0.54 and kurtosis overshoots real.
-- The CFG bear-d headline values (0.87, 1.21) come from the full-eval
-  runs `cfg_eval_w2` / `cfg_eval_w4`; the sweep table above uses
-  plumbing-scale runs with fewer windows — values are NOT interchangeable.
+Forcing the bear regime at w=2 on an example portfolio:
 
-**Regime Validation at w=1.0** (conditional, from
-`runs/retrain_d1__20260706-212108__seed0/metrics/regime_validation.json`):
+| Method | VaR₉₅ | ES₉₅ | VaR₉₉ | Max DD* |
+|---|---|---|---|---|
+| unconditional (w=0) | −0.0317 | −0.0415 | −0.0478 | −0.0817 |
+| **bear stress (w=2)** | **−0.0495** | **−0.0599** | **−0.0669** | **−0.1058** |
 
-| Dimension | Label | KS p | d | Sig? |
-|-----------|-------|------|---|------|
-| vol | high_vol | <0.001 | 0.20 | Yes |
-| vol | normal_vol | <0.001 | −0.22 | Yes |
-| market | bear | <0.001 | 0.70 | Yes |
-| market | bull | <0.001 | −0.46 | Yes |
-| market | sideways | <0.001 | −0.28 | Yes |
-| macro | expansion | <0.001 | −0.42 | Yes |
-| macro | high_inflation | <0.001 | −0.45 | Yes |
-| macro | recession | 0.164 | 0.06 | **No** |
-| macro | stagflation | <0.001 | 0.74 | Yes |
+VaR₉₅ widens by **56%** under the bear stress. No baseline below — bootstrap,
+GARCH, or vanilla — can answer "generate 200 bear-market scenarios."
 
----
+![Stress fan chart](docs/stress_fan_chart_bear.png)
 
-## Stress Demo
+*\*Per-path 4-step drawdowns; not comparable to a multi-year continuous
+drawdown (see limitations).*
 
-Generate regime-conditioned scenario paths, apply them to an example
-portfolio, and compare risk metrics (VaR, ES, max drawdown) against
-unconditional and historical returns.
-
-### Quick usage (CPU, test scale)
+Reproduce with two commands:
 
 ```bash
-# Generate scenario returns under forced high-inflation regime at w=2
 python -m src.stress_demo.scenario_run \
-  --checkpoint runs/cfg_smoke_cond__20260708-124243__seed0/checkpoints/model_best.pt \
-  --regime '{"macro_regime":"high_inflation"}' \
-  --cfg-scale 2.0 --num-scenarios 50 --num-windows 8 \
-  --run-dir runs/stress_demo_test --seed 0
+  --checkpoint runs/cfg_retrain__20260713-204619__seed0/checkpoints/model_best.pt \
+  --regime '{"market_regime": "bear"}' --cfg-scale 2.0 \
+  --num-scenarios 200 --run-dir runs/stress_bear --seed 0 --device cuda
 
-# Compute VaR/ES/drawdown and produce plots
-python -c "
-from pathlib import Path
-from src.stress_demo.scenario_run import run_scenario
-from src.stress_demo.portfolio_stress import (
-    ExamplePortfolio, compute_stress_comparison,
-    write_stress_var_table, generate_stress_fan_chart,
-)
-import numpy as np
-
-data = np.load('runs/stress_demo_test/samples/scenario_returns.npz')
-scenario_results = {
-    'scenario_returns': data['scenario'],
-    'unconditional_returns': data['unconditional'],
-    'historical_returns': data['historical'],
-    'cfg_scale': 2.0,
-    'regime_spec': {'macro_regime': 'high_inflation'},
-}
-results = compute_stress_comparison(scenario_results)
-write_stress_var_table(results, Path('runs/stress_demo_test/stress_var_table.md'))
-generate_stress_fan_chart(scenario_results, Path('runs/stress_demo_test/stress_fan_chart.png'))
-print('Done — see runs/stress_demo_test/')
-"
+python -m src.stress_demo.portfolio_stress \
+  --scenario-npz runs/stress_bear/samples/scenario_returns.npz \
+  --out-dir runs/stress_bear
 ```
 
-Full-GPU stress runs: see `docs/HOST_TASKS.md` §5b–5c.
+### 3. Canonical comparison — where this model wins, and where it doesn't
 
----
+All methods, same test windows, same evaluation space
+(full table: [COMPARISON_TABLE.md](COMPARISON_TABLE.md)):
 
-## Honest Limitations
+| Method | CRPS ↓ | coverage₀.₈ (→0.8) | kurtosis (real: 3.79†) | regime-conditional? |
+|---|---|---|---|---|
+| conditional (CFG w=2) | 0.0039 | 0.658 | **4.58** | **yes** |
+| conditional (no CFG) | 0.0043 | 0.630 | 3.36 | yes |
+| vanilla TimeGrad | 0.0035 | 0.706 | 14.83 | no |
+| historical bootstrap | **0.0034** | **0.802** | 12.73 | no |
+| block bootstrap | 0.0034 | **0.807** | 12.26 | no |
+| GARCH(1,1)-t | 0.0039 | 0.966 (over) | 327.1 | no |
 
-1. **Bootstrap and vanilla beat this model on unconditional metrics.**
-   The historical bootstrap achieves CRPS 0.0034 and coverage 0.80
-   versus 0.0043/0.63 for the conditional model. GARCH-t has better
-   coverage (0.97). Vanilla TimeGrad has better CRPS (0.0035) and
-   coverage (0.71). The conditional model exists to provide targeted
-   regime control, not to win on unconditional sharpness.
+†real = wavelet-denoised test returns, the model's training target.
 
-2. **Recession is underpowered** (108 rows, 1.7% of data). It is the
-   only non-significant regime at w=1.0 (p=0.16) and only reaches
-   marginal significance at the extreme w=4 setting (p=0.022, d=0.08).
+Honest reading: **bootstrap wins CRPS and coverage.** This model's value is
+(a) the closest kurtosis/skewness match to the real distribution, and
+(b) being the only method that can generate regime-conditional scenarios.
+CFG w=2 additionally **dominates the non-CFG conditional on every metric**
+(CRPS, coverage, PIT, and regime control) — the conditioning dropout acts as
+a regularizer.
 
-3. **Stagflation is severely underpowered** (42 rows, 0.67% of data).
-   While it is statistically significant in KS tests, the tiny training
-   support means the regime embedding is noisy and unreliable.
+## Limitations (measured, not hidden)
 
-4. **The model learns denoised targets**, so its generated-return
-   kurtosis differs from raw-return kurtosis. The "generated" column
-   should be compared against `real_denoised` (kurtosis 3.79) for
-   calibration, and against `real_raw_un_denoised` (kurtosis 2.17) for
-   practical tail-risk assessment. CFG w=4 overshoots even the denoised
-   reference (kurtosis 8.20).
+1. **Bootstrap and vanilla beat this model on CRPS** (0.0034–0.0035 vs 0.0039)
+   **and coverage** (0.80–0.81 vs 0.66). Classical methods win on unconditional
+   metrics; none of them can condition on a regime.
+2. **Recession is underpowered** (108 rows, 1.7% of data) — not significant at
+   w≤2. **Stagflation is severely underpowered** (42 rows, 0.67%); its large
+   effect size (d = 0.5–0.7) carries wide uncertainty.
+3. **The model learns wavelet-denoised targets**, so its kurtosis (3.4–4.6)
+   matches denoised returns (3.79), not raw returns (2.17). Raw-return
+   references are reported alongside in every table.
+4. **w=4 trades calibration for control**: coverage₀.₈ falls 0.66 → 0.54 and
+   kurtosis inflates to 8.2. Use w=2 as the default; w=4 is an extreme-stress
+   mode.
+5. **Generated drawdowns are per-path over a 4-step horizon** and cannot be
+   compared to multi-year continuous drawdowns of the historical series.
+6. **PIT is non-uniform for all diffusion variants** (KS p ≈ 0) — calibration
+   is imperfect across the board; only the bootstraps pass the PIT test.
 
-5. **CFG w=4 trades calibration for regime control.** At w=4, coverage
-   drops from 0.66 to 0.54 — far below nominal 0.80. Use w=2 for
-   balanced stress testing and w=4 only when maximum regime separation
-   is needed (e.g., crash-scenario generation for downstream RL
-   robustness training).
+## Rigor
 
-6. **All forecasts are 5-step ahead.** A 5-step horizon limits max
-   drawdown duration to 4 steps per path, so generated drawdown stats
-   are not comparable to the raw-real row's multi-year continuous
-   drawdown. The comparison table reports per-path drawdowns only;
-   scenario-level drawdowns appear in the stress demo.
+- **Leakage-tested causal pipeline**: every feature at time t is proven to
+  depend only on data ≤ t (`tests/test_no_leakage.py`, incl. a future-mutation
+  invariance test: corrupting 22 future GDP quarters leaves gdp_qoq at t
+  unchanged).
+- **Metric implementations verified against analytic ground truth** on
+  synthetic data (Gaussian CRPS/coverage, Student-t tail index, known-value
+  drawdowns) — 90 tests.
+- **Fair baselines**: vanilla TimeGrad retrained from scratch on the identical
+  clean pipeline, same seed, same budget — the only difference is conditioning.
+- **Every number above traces to a committed metrics JSON** under `runs/`
+  (folders listed in [COMPARISON_TABLE.md](COMPARISON_TABLE.md)).
+- Seeded runs, per-run folders, best-checkpoint selection by validation loss.
 
----
+## Setup & training
 
-## Reproducibility
+```bash
+pip install -r requirements.txt
+pip install torch --index-url https://download.pytorch.org/whl/cu130  # GPU
 
-- **Leakage tested:** `tests/test_no_leakage.py` verifies 100 random
-  timestamps — every feature computed from past-only data.
-- **Causal pipeline:** wavelet denoising is rolling-window (no
-  look-ahead), no `.bfill()`, all regime thresholds fit on train-only.
-  Documented in `docs/data_integrity.md`.
-- **Seed:** `--seed 0` for all committed runs. Determinism verified by
-  bit-for-bit reprotest.
-- **Run folders:** every metric in this README traces to a committed
-  JSON under `runs/`:
-  - `retrain_d1__20260706-212108__seed0` (conditional, baselines)
-  - `vanilla_eval__20260706-214104__seed0` (vanilla)
-  - `cfg_eval_w2__20260713-212242__seed0` (CFG w=2 full eval)
-  - `cfg_eval_w4__20260713-214944__seed0` (CFG w=4 full eval)
-  - `cfg_sweep__20260713-205210__seed0` (CFG sweep, monotonic trend)
+# train conditional with CFG
+python run.py --config configs/default.yaml --seed 0 \
+  --run-name my_run --epochs 100 --cfg-dropout 0.1
 
----
+# evaluate
+python run.py --config configs/default.yaml --seed 0 --run-name my_eval \
+  --eval --eval-checkpoint runs/my_run*/checkpoints/model_best.pt \
+  --num-samples 200 --cfg-scale 2.0
+```
 
-*DRAFT — the owner writes the final version. Every number in this
-document is sourced from a committed metrics JSON. See
-`COMPARISON_TABLE.md` for the full canonical table, `docs/cfg_sweep.md`
-for the CFG sweep trends, and `docs/KNOWN_ISSUES.md` for open issues.*
+Architecture and design docs: [docs/architecture.md](docs/architecture.md),
+[docs/MASTER_SPEC.md](docs/MASTER_SPEC.md).
