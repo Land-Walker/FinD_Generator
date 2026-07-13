@@ -1,4 +1,8 @@
 """Unit tests for src/stress_demo/portfolio_stress.py."""
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 from src.stress_demo.portfolio_stress import ExamplePortfolio, compute_stress_comparison
 from src.evaluation.stylized_facts import var_es
@@ -100,3 +104,57 @@ class TestVarES:
         var, es = var_es(data, 0.95)
         assert var == 0.01
         assert np.isclose(es, 0.01, atol=1e-14)
+
+
+class TestPortfolioStressCLI:
+    def _make_synthetic_npz(self, out_dir: Path) -> Path:
+        rng = np.random.default_rng(42)
+        npz_path = out_dir / "scenario_returns.npz"
+        np.savez_compressed(
+            npz_path,
+            scenario=rng.normal(-0.003, 0.02, (20, 2, 3)).astype(np.float32),
+            unconditional=rng.normal(0.0, 0.01, (20, 2, 3)).astype(np.float32),
+            targets=rng.normal(0.0, 0.01, (2, 3)).astype(np.float32),
+            historical=rng.normal(0.0, 0.01, 100).astype(np.float32),
+        )
+        return npz_path
+
+    def test_cli_writes_both_outputs(self, tmp_path):
+        npz_path = self._make_synthetic_npz(tmp_path)
+        out_dir = tmp_path / "output"
+        result = subprocess.run(
+            [sys.executable, "-m", "src.stress_demo.portfolio_stress",
+             "--scenario-npz", str(npz_path), "--out-dir", str(out_dir)],
+            capture_output=True, text=True, cwd=Path(__file__).parent.parent,
+        )
+        assert result.returncode == 0, f"CLI failed:\n{result.stderr}"
+        table = out_dir / "stress_var_table.md"
+        chart = out_dir / "stress_fan_chart.png"
+        assert table.exists(), f"Missing {table}"
+        assert chart.exists(), f"Missing {chart}"
+        table_text = table.read_text()
+        assert "VaR_95" in table_text
+        assert "stress regime" in table_text
+        assert "Written stress_var_table.md" in result.stdout
+        assert "Written stress_fan_chart.png" in result.stdout
+
+    def test_cli_missing_npz_fails_loud(self, tmp_path):
+        result = subprocess.run(
+            [sys.executable, "-m", "src.stress_demo.portfolio_stress",
+             "--scenario-npz", str(tmp_path / "nonexistent.npz"),
+             "--out-dir", str(tmp_path / "output")],
+            capture_output=True, text=True, cwd=Path(__file__).parent.parent,
+        )
+        assert result.returncode != 0, "Expected non-zero exit for missing npz"
+        assert "ERROR" in result.stderr
+
+    def test_cli_unreadable_npz_fails_loud(self, tmp_path):
+        bad_npz = tmp_path / "bad.npz"
+        bad_npz.write_text("not a numpy file")
+        result = subprocess.run(
+            [sys.executable, "-m", "src.stress_demo.portfolio_stress",
+             "--scenario-npz", str(bad_npz), "--out-dir", str(tmp_path / "output")],
+            capture_output=True, text=True, cwd=Path(__file__).parent.parent,
+        )
+        assert result.returncode != 0, "Expected non-zero exit for unreadable npz"
+        assert "ERROR" in result.stderr
